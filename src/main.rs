@@ -141,7 +141,9 @@ async fn handle_commit(args: CommitArgs, config: &AppConfig) -> Result<(), AppEr
         match openai_response.json::<OpenAIChatCompletionResponse>().await {
             Ok(response) => {
                 if let Some(choice) = response.choices.get(0) {
-                    ai_generated_message.push_str(&choice.message.content);
+                    let original_content = &choice.message.content;
+                    let cleaned_content = ai_utils::clean_ai_output(original_content);
+                    ai_generated_message.push_str(&cleaned_content);
                 } else {
                     tracing::warn!("No choices found in AI response.");
                     return Err(AIError::NoChoiceInResponse.into());

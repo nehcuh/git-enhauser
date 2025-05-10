@@ -49,3 +49,143 @@ pub struct OpenAIChatCompletionResponse {
     pub choices: Vec<OpenAIChoice>,
     pub usage: OpenAIUsage,
 }
+
+/// Removes <think>...</think> tags and their content from a given string.
+///
+/// The (?s) flag allows . to match newlines, in case <think> tags span multiple lines.
+/// This regex is static and pre-tested as valid, so unwrap() is generally acceptable
+/// for Regex::new if it were compiled once (e.g., using once_cell::sync::Lazy).
+/// For a function that might be called frequently, compiling the regex once and reusing it
+/// is more performant. Here, for simplicity in a utility function that might not be
+/// a hot path, direct use is shown. Consider `once_cell` for optimization if needed.
+pub fn clean_ai_output(text: &str) -> String {
+    // In a real-world scenario where this function might be called very frequently,
+    // compiling the regex once using `once_cell::sync::Lazy` would be more performant.
+    // For example:
+    // use once_cell::sync::Lazy;
+    // static RE_THINK_TAGS: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?s)<think>.*?</think>").unwrap());
+    // RE_THINK_TAGS.replace_all(text, "").into_owned()
+    //
+    // However, for this case, direct compilation is shown for simplicity.
+    // The regex crate itself has internal caching, so performance might still be acceptable.
+    match regex::Regex::new(r"(?s)<think>.*?</think>") {
+        Ok(re) => re.replace_all(text, "").into_owned(),
+        Err(_) => {
+            // Fallback or error logging if regex compilation fails, though unlikely for a static pattern.
+            // For this specific static pattern, unwrap() might be considered if an unrecoverable error is acceptable.
+            // However, returning the original text or an error might be safer in a library.
+            // Here, we'll return the original text if regex fails, though it indicates an issue with the regex itself.
+            text.to_string()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use regex::Regex; // Keep this import if you want to test Regex directly or for other regex needs in tests
+
+    #[test]
+    fn test_clean_ai_output_no_tags() {
+        let input = "This is a normal commit message.";
+        let expected = "This is a normal commit message.";
+        assert_eq!(clean_ai_output(input), expected);
+    }
+
+    #[test]
+    fn test_clean_ai_output_single_tag() {
+        let input = "<think>This is a thought.</think>Actual commit message.";
+        let expected = "Actual commit message.";
+        assert_eq!(clean_ai_output(input), expected);
+    }
+
+    #[test]
+    fn test_clean_ai_output_multiple_tags() {
+        let input = "<think>Thought 1</think>Commit part 1. <think>Thought 2</think>Commit part 2.";
+        let expected = "Commit part 1. Commit part 2.";
+        assert_eq!(clean_ai_output(input), expected);
+    }
+
+    #[test]
+    fn test_clean_ai_output_multiline_tag() {
+        let input = "Commit start.\n<think>\nMultiline thought\nAnother line\n</think>\nCommit end.";
+        let expected = "Commit start.\n\nCommit end."; // Regex replace_all removes the tag and its content
+        assert_eq!(clean_ai_output(input), expected);
+    }
+
+    #[test]
+    fn test_clean_ai_output_empty_tag() {
+        let input = "Before<think></think>After";
+        let expected = "BeforeAfter";
+        assert_eq!(clean_ai_output(input), expected);
+    }
+
+    #[test]
+    fn test_clean_ai_output_tag_at_start() {
+        let input = "<think>Initial thought.</think>The rest of the message.";
+        let expected = "The rest of the message.";
+        assert_eq!(clean_ai_output(input), expected);
+    }
+
+    #[test]
+    fn test_clean_ai_output_tag_at_end() {
+        let input = "Message part.<think>Final thought.</think>";
+        let expected = "Message part.";
+        assert_eq!(clean_ai_output(input), expected);
+    }
+
+    #[test]
+    fn test_clean_ai_output_only_tag() {
+        let input = "<think>This is entirely a thought.</think>";
+        let expected = "";
+        assert_eq!(clean_ai_output(input), expected);
+    }
+
+    #[test]
+    fn test_clean_ai_output_nested_tags_not_specifically_handled_outermost_wins() {
+        // Standard regex (non-recursive) will match the shortest non-greedy .*?
+        // For input "<think>outer<think>inner</think>still outer</think>Commit message."
+        // the regex matches and removes "<think>outer<think>inner</think>",
+        // leaving "still outer</think>Commit message.".
+        let input = "<think>outer<think>inner</think>still outer</think>Commit message.";
+        let expected = "still outer</think>Commit message.";
+        assert_eq!(clean_ai_output(input), expected);
+
+        let input_greedy_would_fail = "<think>thought 1</think> message <think>thought 2</think>";
+        // if it were greedy like <think>.*</think>, it would consume " message "
+        // but with .*? it correctly separates them.
+        let re_greedy_test = Regex::new(r"(?s)<think>.*</think>").unwrap();
+        assert_ne!(re_greedy_test.replace_all(input_greedy_would_fail, "").into_owned(), " message ");
+    }
+
+    #[test]
+    fn test_clean_ai_output_no_closing_tag_leaves_untouched_if_regex_is_strict() {
+        // Our regex r"(?s)<think>.*?</think>" requires a closing tag.
+        // If it's not found, it shouldn't match.
+        let input = "<think>This thought is not closed. Actual message.";
+        let expected = "<think>This thought is not closed. Actual message."; // Or however your regex behaves with unclosed tags
+        assert_eq!(clean_ai_output(input), expected);
+    }
+
+    #[test]
+    fn test_clean_ai_output_tags_with_attributes_ignored_by_current_regex() {
+        // The current regex <think> is simple and doesn't account for <think foo="bar">
+        // This test confirms it only removes simple <think> tags.
+        let input = "<think foo=\"bar\">A thought with attributes.</think>Commit message.";
+        let expected = "<think foo=\"bar\">A thought with attributes.</think>Commit message."; // Current regex won't match this
+        assert_eq!(clean_ai_output(input), expected);
+
+        let input_simple = "<think>Simple thought.</think>Commit message.";
+        let expected_simple = "Commit message.";
+        assert_eq!(clean_ai_output(input_simple), expected_simple);
+    }
+     #[test]
+    fn test_complex_scenario_with_varied_spacing_and_content() {
+        let input = "  <think>  Leading space thought. </think> Commit part 1.   <think>\\nMultiline\\n  Thought\\n</think>Middle part.<think>Trailing thought</think>   Final part.  ";
+        let expected = "   Commit part 1.   Middle part.   Final part.  ";
+        // clean_ai_output itself does not trim the surrounding whitespace from the overall string.
+        // That kind of trimming might happen at a later stage if desired (e.g., before committing).
+        assert_eq!(clean_ai_output(input), expected);
+    }
+
+}

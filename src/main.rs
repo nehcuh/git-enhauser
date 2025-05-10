@@ -55,16 +55,18 @@ async fn run_app() -> Result<(), AppError> {
     }
 
     let raw_cli_args: Vec<String> = std::env::args().skip(1).collect();
-    let global_ai_idx = raw_cli_args.iter().position(|arg| arg == "--ai");
+    // 1. Check for help flags first
+    if args_contain_help(&raw_cli_args) {
+        let ai_flag_present = raw_cli_args.iter().any(|arg| arg == "--ai");
+        if ai_flag_present {
+            tracing::info!("Help flag detected with --ai. Explaining Git command output...");
+            let mut command_to_execute_for_help = raw_cli_args.clone();
+            command_to_execute_for_help.retain(|arg| arg != "--ai");
 
-    if let Some(idx_of_ai) = global_ai_idx {
-        tracing::debug!("Global --ai flag detected at index {}.", idx_of_ai);
-        let mut effective_command_args: Vec<String> = raw_cli_args.clone();
-        effective_command_args.remove(idx_of_ai);
-
-        if args_contain_help(&effective_command_args) {
-            tracing::info!("Global --ai with help flag detected. Explaining Git command output...");
-            let cmd_output = execute_git_command_and_capture_output(&effective_command_args)?;
+            // If command_to_execute_for_help is now empty (e.g. `git-enhauser --ai --help` -> `[]` after retain)
+            // execute_git_command_and_capture_output will default to `git --help`
+            // If it's `["commit", "--help"]`, it will execute `git commit --help`
+            let cmd_output = execute_git_command_and_capture_output(&command_to_execute_for_help)?;
             let mut text_to_explain = cmd_output.stdout;
             if !cmd_output.status.success() && !cmd_output.stderr.is_empty() {
                 text_to_explain.push_str("\n--- Stderr ---\n");
@@ -75,45 +77,54 @@ async fn run_app() -> Result<(), AppError> {
                 Err(e) => return Err(AppError::AI(e)),
             }
         } else {
-            let mut enhancer_args_to_parse = vec!["git-enhancer-dummy".to_string()];
-            enhancer_args_to_parse.extend_from_slice(&effective_command_args);
-            match GitEnhancerArgs::try_parse_from(&enhancer_args_to_parse) {
-                Ok(parsed_enhancer_args) => match parsed_enhancer_args.command {
-                    EnhancerSubCommand::Commit(commit_args) if commit_args.ai => {
-                        tracing::info!("Global --ai followed by 'commit --ai'. Executing AI commit message generation...");
+            // No --ai, just passthrough the help request to git
+            tracing::info!("Help flag detected without --ai. Passing to git.");
+            passthrough_to_git(&raw_cli_args)?;
+        }
+    } else {
+        // 2. Not a help request, try parsing as git-enhancer subcommand or global AI explanation
+        let mut enhancer_parser_args = vec!["git-enhancer-dummy".to_string()]; // Dummy executable name for clap
+        enhancer_parser_args.extend_from_slice(&raw_cli_args);
+
+        match GitEnhancerArgs::try_parse_from(&enhancer_parser_args) {
+            Ok(parsed_enhancer_args) => {
+                // Successfully parsed as a git-enhancer specific command
+                match parsed_enhancer_args.command {
+                    EnhancerSubCommand::Commit(commit_args) => {
+                        // This handles `git-enhauser commit --ai` as well as `git-enhauser commit -m "message"`
+                        // The `handle_commit` function itself checks `commit_args.ai`
+                        tracing::info!("Parsed as git-enhancer commit subcommand. Delegating to handle_commit.");
                         handle_commit(commit_args, &config).await?;
                     }
-                    _ => {
-                        tracing::info!("Global --ai detected for command: git {}", effective_command_args.join(" "));
-                        match explain_git_command(&config, &effective_command_args).await {
-                            Ok(explanation) => println!("{}", explanation),
-                            Err(e) => return Err(AppError::AI(e)),
-                        }
+                    // Future: Add other EnhancerSubCommand arms here if they are added to cli.rs
+                }
+            }
+            Err(_) => {
+                // Failed to parse as a specific git-enhancer subcommand.
+                // This could be a global --ai explanation request for a generic git command (e.g. `git-enhauser --ai status`),
+                // or just a command to passthrough (e.g. `git-enhauser status`).
+                let ai_flag_present = raw_cli_args.iter().any(|arg| arg == "--ai");
+                if ai_flag_present {
+                    tracing::info!("Not a specific git-enhancer subcommand, but --ai flag detected. Explaining Git command...");
+                    let mut command_to_explain = raw_cli_args.clone();
+                    command_to_explain.retain(|arg| arg != "--ai"); // Remove all occurrences of --ai
+
+                    if command_to_explain.is_empty() {
+                        // Handle `git-enhauser --ai` (with no actual command after removing --ai)
+                        // Default to explaining "git --help"
+                        tracing::debug!("No specific command with global --ai, explaining 'git --help'.");
+                        command_to_explain.push("--help".to_string());
                     }
-                },
-                Err(_) => {
-                    tracing::info!("Global --ai detected for command: git {}", effective_command_args.join(" "));
-                    match explain_git_command(&config, &effective_command_args).await {
+                    match explain_git_command(&config, &command_to_explain).await {
                         Ok(explanation) => println!("{}", explanation),
                         Err(e) => return Err(AppError::AI(e)),
                     }
+                } else {
+                    // No --ai, not a known enhancer subcommand. Pass through to git.
+                    // e.g., `git-enhauser status`
+                    tracing::info!("Not a recognized git-enhancer subcommand and no --ai. Passing to git.");
+                    passthrough_to_git(&raw_cli_args)?;
                 }
-            }
-        }
-    } else {
-        tracing::debug!("No global --ai flag detected.");
-        let mut args_for_enhancer_parser = vec!["git-enhancer-dummy".to_string()];
-        args_for_enhancer_parser.extend_from_slice(&raw_cli_args);
-        match GitEnhancerArgs::try_parse_from(&args_for_enhancer_parser) {
-            Ok(parsed_args) => match parsed_args.command {
-                EnhancerSubCommand::Commit(args) => {
-                    tracing::info!("Parsed as git-enhancer commit subcommand.");
-                    handle_commit(args, &config).await?;
-                }
-            },
-            Err(_) => {
-                tracing::info!("Not recognized git-enhancer subcommand. Passing to git: git {}", raw_cli_args.join(" "));
-                passthrough_to_git(&raw_cli_args)?;
             }
         }
     }

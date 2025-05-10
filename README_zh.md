@@ -90,43 +90,68 @@
     git-enhancer commit --ai -S  # 用于 GPG 签名
     ```
 
-### 2. AI 驱动的命令解释与辅助 (全局 `--ai` 标志)
+### 2. AI 驱动的命令解释与辅助
 
-全局 `--ai` 标志（在参数中遇到的第一个 `--ai`）会激活 AI 辅助功能，以理解 Git 命令。任何后续的 `--ai` 标志都将被视为命令本身的一部分。
+`git-enhancer` 使用 `--ai` 标志来激活多种 AI 辅助功能。其具体行为取决于 `--ai` 如何与其他命令和选项组合。核心原则是：
+- `git-enhancer commit --ai` 用于生成提交信息。
+- 在其他情况下，`--ai` 通常用于解释 Git 命令或其帮助文档。
 
-**a. 解释 Git 帮助输出：**
+以下是详细场景：
 
-如果全局 `--ai` 存在并且命令包含 `-h` 或 `--help`，`git-enhancer` 将首先获取 Git 的标准帮助输出，然后请求 AI 解释该输出。
+**a. 解释 Git 命令的帮助页面 (例如 `git-enhauser commit --help --ai`)**
 
-```bash
-# 获取对 'git status --short --help' 的 AI 解释
-git-enhancer --ai status --short --help
+当 `--ai` 标志与一个包含帮助选项 (`-h` 或 `--help`) 的 Git 命令一起使用时，`git-enhancer` 会获取该 Git 命令的标准帮助文档，并利用 AI 对其进行解释。
 
-# 全局 --ai 标志可以位于参数列表的任何位置
-git-enhancer status --short --ai --help
-```
+*   **预期行为**：AI 解释 Git 命令的帮助文档。
+*   **示例**：
+    ```bash
+    # 场景：我想让 AI 解释 'git commit' 命令的帮助信息
+    git-enhauser commit --help --ai
 
-**b. 解释 Git 命令功能：**
+    # '--ai' 标志也可以在前面
+    git-enhauser --ai commit --help
 
-如果全局 `--ai` 存在但没有 `-h` 或 `--help`，并且该命令不是 `git-enhancer` 特定的 AI 子命令（如 `commit --ai`），AI 将解释给定的 Git 命令及其选项的作用。
+    # 解释 'git status --short' 的帮助信息
+    git-enhauser status -s --help --ai
+    ```
 
-```bash
-# 获取 AI 对 'git log --oneline -n 5' 功能的解释
-git-enhancer --ai log --oneline -n 5
+**b. 解释 Git 命令的实际功能 (例如 `git-enhauser --ai status -s`)**
 
-# 获取 AI 对 'git commit -m "..."' 功能的解释 (这不同于 AI 生成提交信息)
-git-enhancer --ai commit -m "一条标准的提交信息"
-```
+如果使用了 `--ai` 标志，但命令中不包含帮助选项 (`-h` 或 `--help`)，并且该命令**不**是 `git-enhancer commit --ai`（用于生成提交信息），那么 AI 将会解释您指定的 Git 命令及其选项的用途和效果。
 
-**c. 与 `git-enhancer` 特定的 AI 子命令的交互：**
+*   **预期行为**：AI 解释给定 Git 命令的功能。
+*   **示例**：
+    ```bash
+    # 场景：我想让 AI 解释 'git status -s' 命令是做什么的
+    git-enhauser --ai status -s
 
-如果使用了全局 `--ai`，并且后续的命令 *是* 一个 `git-enhancer` 特定的 AI 子命令（如 `commit --ai`），则会触发该子命令的 AI 功能。
+    # 获取 AI 对 'git log --oneline -n 5' 功能的解释
+    git-enhauser --ai log --oneline -n 5
 
-```bash
-# 触发 AI 提交信息生成
-git-enhancer --ai commit --ai --all
-```
-在此示例中，第一个 `--ai` 启用了全局 AI 模式。然后，`commit --ai --all` 部分被解析为 `commit` 子命令，并且其 *自身* 的 `--ai` 标志激活了针对所有更改的 AI 信息生成。
+    # 解释 'git commit -m "..."' 命令本身的作用
+    # (注意：这不会生成 AI commit message。要生成 AI commit message，请使用 'git-enhauser commit --ai')
+    git-enhauser --ai commit -m "一条标准的提交信息"
+    ```
+
+**c. `--ai` 标志与 `git-enhancer commit --ai` (消息生成) 的特定交互**
+
+`git-enhancer` 的核心功能之一是 `commit --ai` 用于自动生成提交信息。当 `--ai` 标志（可能意图用于解释）与这个特定的消息生成子命令组合时，**消息生成功能将优先执行**。
+
+*   **预期行为**：即使存在多个 `--ai` 标志，或者 `--ai` 标志位置不同，只要最终可以解析为 `git-enhancer` 的 `commit` 子命令且其 `--ai` 选项被激活，就会执行 AI 提交信息生成。
+*   **示例**：
+    ```bash
+    # 场景：明确使用 'commit --ai' 来生成 AI commit message (这是主要用法)
+    git-enhauser commit --ai
+
+    # 场景：即使存在一个可能被视为“全局解释”的 --ai 标志，
+    # 但由于 'commit --ai' 是 git-enhancer 的一个特定 AI 功能（消息生成），
+    # 因此消息生成优先。
+    git-enhauser --ai commit --ai
+
+    # 同样，以下命令也会触发 AI 提交信息生成，并包含 GPG 签名
+    git-enhauser --ai commit --ai -S
+    ```
+    这种设计的目的是确保 `git-enhancer commit --ai` 作为生成提交信息的明确指令，其行为是稳定和可预测的，即使在与其他 `--ai` 用法组合时也是如此。
 
 ### 3. 标准提交信息 (无全局 `--ai` 时)
 

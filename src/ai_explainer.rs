@@ -1,24 +1,23 @@
 // git-enhancer/src/ai_explainer.rs
+use crate::ai_utils::{
+    ChatMessage, OpenAIChatCompletionResponse, OpenAIChatRequest, clean_ai_output,
+};
 use crate::config::AppConfig;
 use crate::errors::AIError;
-use crate::ai_utils::{ChatMessage, OpenAIChatRequest, OpenAIChatCompletionResponse, clean_ai_output};
+use std::fs;
 
-const EXPLAIN_OUTPUT_SYSTEM_PROMPT: &str = r#"You are a helpful assistant integrated into a Git command-line enhancer.
-The user has executed a Git command and received the following output.
-Please explain this output clearly and concisely.
-If the output indicates an error or a common misunderstanding, clarify it.
-Focus on what the output means and what the user might want to do next.
-Do not include any conversational pleasantries or self-references like "As an AI...".
-Just provide the explanation directly."#;
-
-const EXPLAIN_COMMAND_SYSTEM_PROMPT: &str = r#"You are a helpful assistant integrated into a Git command-line enhancer.
-The user wants to understand a specific Git command.
-Please explain the Git command provided by the user clearly and concisely.
-Describe its purpose, common options (if any are apparent or highly relevant), and typical use cases.
-If the command seems incomplete or potentially problematic, you can briefly note that.
-Do not include any conversational pleasantries or self-references like "As an AI...".
-Just provide the explanation for the command directly.
-The user's command will follow."#;
+// Function to load the system prompt from the specified file.
+// Note: This uses a relative path, which assumes the executable is run from the project root.
+// For more robust path handling, consider using `env!("CARGO_MANIFEST_DIR")`
+// or including the prompt at compile time if dynamic loading isn't strictly necessary for all scenarios.
+fn load_system_prompt() -> Result<String, AIError> {
+    fs::read_to_string("prompts/explanation-prompt").map_err(|e| {
+        AIError::ExplainerConfigurationError(format!(
+            "Failed to load system prompt from 'prompts/explanation-prompt': {}",
+            e
+        ))
+    })
+}
 
 /// Helper function to execute the AI request and process the response.
 async fn execute_ai_request(
@@ -33,7 +32,10 @@ async fn execute_ai_request(
     };
 
     if let Ok(json_string) = serde_json::to_string_pretty(&request_payload) {
-        tracing::debug!("Sending JSON payload to AI for explanation:\n{}", json_string);
+        tracing::debug!(
+            "Sending JSON payload to AI for explanation:\n{}",
+            json_string
+        );
     } else {
         tracing::warn!("Failed to serialize AI request payload for debugging.");
     }
@@ -48,7 +50,7 @@ async fn execute_ai_request(
             request_builder = request_builder.bearer_auth(api_key);
         }
     }
-    
+
     let openai_response = request_builder
         .json(&request_payload)
         .send()
@@ -59,7 +61,7 @@ async fn execute_ai_request(
             // AIError::RequestFailed is a general error for reqwest issues.
             // AIError::ExplainerNetworkError could be used if a more specific categorization is needed
             // and can be reliably determined from `e`.
-            AIError::RequestFailed(e) 
+            AIError::RequestFailed(e)
         })?;
 
     if !openai_response.status().is_success() {
@@ -86,7 +88,10 @@ async fn execute_ai_request(
                     Err(AIError::EmptyMessage)
                 } else {
                     let cleaned_content = clean_ai_output(original_content);
-                    tracing::debug!("Cleaned AI explanation received: \"{}\"", cleaned_content.chars().take(100).collect::<String>()); // Log snippet
+                    tracing::debug!(
+                        "Cleaned AI explanation received: \"{}\"",
+                        cleaned_content.chars().take(100).collect::<String>()
+                    ); // Log snippet
                     Ok(cleaned_content)
                 }
             } else {
@@ -110,28 +115,40 @@ pub async fn explain_git_command_output(
 ) -> Result<String, AIError> {
     if command_output.trim().is_empty() {
         // This is not an error, but a valid case where there's nothing to explain.
-        return Ok(
-            "The command produced no output for the AI to explain. \
+        return Ok("The command produced no output for the AI to explain. \
             It might be a command that doesn't print to stdout/stderr on success, \
             or it requires specific conditions to produce output."
-                .to_string(),
-        );
+            .to_string());
     }
 
-    tracing::debug!("Requesting AI explanation for command output (first 200 chars):\n---\n{}\n---", command_output.chars().take(200).collect::<String>());
+    tracing::debug!(
+        "Requesting AI explanation for command output (first 200 chars):\n---\n{}\n---",
+        command_output.chars().take(200).collect::<String>()
+    );
+
+    let system_prompt_content = load_system_prompt()?;
 
     let messages = vec![
         ChatMessage {
             role: "system".to_string(),
-            content: EXPLAIN_OUTPUT_SYSTEM_PROMPT.to_string(),
+            content: system_prompt_content.clone(), // Use cloned content for this request
         },
         ChatMessage {
             role: "user".to_string(),
             content: command_output.to_string(), // Send the full output
         },
     ];
-    
-    execute_ai_request(config, messages).await
+
+    match execute_ai_request(config, messages).await {
+        Ok(ai_explanation) => {
+            let formatted_output = format!(
+                "## Original Output\n\n```text\n{}\n```\n\n## AI Explanation\n\n{}",
+                command_output, ai_explanation
+            );
+            Ok(formatted_output)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Takes a Git command (as a sequence of its parts/arguments)
@@ -146,14 +163,19 @@ pub async fn explain_git_command(
     }
 
     let command_to_explain = format!("git {}", command_parts.join(" "));
-    tracing::debug!("Requesting AI explanation for command: {}", command_to_explain);
-    
+    tracing::debug!(
+        "Requesting AI explanation for command: {}",
+        command_to_explain
+    );
+
     let user_message_content = command_to_explain;
+
+    let system_prompt_content = load_system_prompt()?;
 
     let messages = vec![
         ChatMessage {
             role: "system".to_string(),
-            content: EXPLAIN_COMMAND_SYSTEM_PROMPT.to_string(),
+            content: system_prompt_content, // Use content for this request
         },
         ChatMessage {
             role: "user".to_string(),

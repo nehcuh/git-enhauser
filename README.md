@@ -115,22 +115,22 @@ RUST_LOG=debug git-enhancer commit --ai
 
 ```mermaid
 graph TD
-    A[User stages changes: git add .] --> B{User runs: git-enhancer commit --ai};
-    B --> C{git-enhancer starts};
-    C --> D[Load config.json & prompts/commit-prompt];
-    D --> E[Run: git diff --staged];
-    E --> F{Any staged changes?};
-    F -- No --> G[Inform user, exit or pass to git commit];
-    F -- Yes --> H[Extract diff text];
-    H --> I[Prepare AI request (diff + prompt)];
-    I --> J[Send request to LLM API];
-    J --> K[Receive AI-generated commit message];
-    K --> L{Message valid?};
-    L -- No --> M[Log warning/error, potentially use fallback];
-    L -- Yes --> N[Construct: git commit -m \"<AI_MESSAGE>\"];
-    N --> O[Execute git commit command];
-    O --> P[Log success/failure];
-    P --> Q[Exit];
+    A["User stages changes: git add ."] --> B{"User runs: git-enhancer commit --ai"};
+    B --> C{"git-enhancer starts"};
+    C --> D["Load config.json & prompts/commit-prompt"];
+    D --> E["Run: git diff --staged"];
+    E --> F{"Any staged changes?"};
+    F -- "No" --> G["Inform user, exit or pass to git commit"];
+    F -- "Yes" --> H["Extract diff text"];
+    H --> I["Prepare AI request (diff + prompt)"];
+    I --> J["Send request to LLM API"];
+    J --> K["Receive AI-generated commit message"];
+    K --> L{"Message valid?"};
+    L -- "No" --> M["Log warning/error, potentially use fallback"];
+    L -- "Yes" --> N["Construct: git commit -m \"<AI_MESSAGE>\""];
+    N --> O["Execute git commit command"];
+    O --> P["Log success/failure"];
+    P --> Q["Exit"];
 ```
 
 ## Development

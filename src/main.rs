@@ -10,39 +10,48 @@ struct ChatMessage {
     content: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct OllamaOptions {
-    temperature: f32,
-    // 你可以在这里添加其他 ollama 支持选项，例如 top_p, top_k 等
-    // num_ctx: Option<u32>
-    // seed: Option<i32>
-}
-
-// 定义发送到Ollama /api/chat端点的请求体结构体
+// 定义发送到Ollama /v1/chat/completions端点的请求体结构体
 #[derive(Serialize, Debug)]
-struct OllamaChatRequest {
+struct OpenAIChatRequest {
     model: String,
     messages: Vec<ChatMessage>,
-    options: OllamaOptions,
+    temperature: Option<f32>, // OpenAI API通常将temperature作为可选的顶层参数
     stream: bool,
+    // 你可以在这里添加其他OpenAI支持的选项，例如 top_p, max_tokens 等
+    // "max_tokens": Option<u32>,
+    // "top_p": Option<f32>,
 }
 
-// 定义从 Ollama /api/chat 接受的响应消息结构体
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct OllamaResponseMessage {
+#[derive(Deserialize, Debug, Clone)]
+struct OpenAIMessage {
     role: String,
     content: String,
 }
 
-// 定义从 Ollama /api/chat 接收的完整响应结构体 (stream: false)
 #[derive(Deserialize, Debug)]
-struct OllamaChatResponse {
+struct OpenAIChoice {
+    index: u32,
+    message: OpenAIMessage,
+    finish_reason: String,
+    // logprobs: Option<serde_json::Value>, // 如果需要解析logprobs
+}
+
+#[derive(Deserialize, Debug)]
+struct OpenAIUsage {
+    prompt_tokens: u32,
+    completion_tokens: u32,
+    total_tokens: u32,
+}
+
+#[derive(Deserialize, Debug)]
+struct OpenAIChatCompletionResponse {
+    id: String,
+    object: String,
+    created: i64, // 通常是Unix时间戳
     model: String,
-    created_at: String,
-    message: OllamaResponseMessage,
-    done: bool,
-    #[serde(flatten)]
-    extra: std::collections::HashMap<String, serde_json::Value>,
+    system_fingerprint: Option<String>, // 根据您的示例，这个字段存在
+    choices: Vec<OpenAIChoice>,
+    usage: OpenAIUsage,
 }
 
 #[derive(Parser, Debug)]
@@ -119,7 +128,7 @@ async fn handle_commit(args: CommitArgs) -> Result<(), Box<dyn std::error::Error
         // 2.Send diff to AI (Simulated for now)
         // In a real scenario, you would make an HTTP request here.
         // For example, using `reqwest`
-        let ollama_api_url = "http://localhost:11434/v1/api/chat/completions";
+        let openai_api_url = "http://localhost:11434/v1/chat/completions";
         let model_name = "qwen3:32b-q8_0";
         let system_prompt = r#"
 **系统提示（System Prompt）**:
@@ -152,11 +161,16 @@ index 83db48f..2c6f1f0 100644
 更新 add 函数以满足新的需求，返回值增加1。
 ```
 "#;
-        let user_prompt = r#"
+        let user_prompt = format!(
+            r#"
 这里是 git diff 信息：
-{diff.trim()}
+{}
 请帮我生成合适的 commit 信息
-"#;
+"#,
+            diff.trim()
+        );
+        println!("diff info: {}", diff.trim());
+        println!("user prompt: {}", user_prompt);
         let messages = vec![
             ChatMessage {
                 role: "system".to_string(),
@@ -164,19 +178,18 @@ index 83db48f..2c6f1f0 100644
             },
             ChatMessage {
                 role: "user".to_string(),
-                content: user_prompt.to_string(),
+                content: user_prompt,
             },
         ];
 
         // 构建请求选项
-        let temperature = 0.7;
-        let options = OllamaOptions { temperature };
+        let temperature = Some(0.7);
 
         // 构建请求体
-        let request_payload = OllamaChatRequest {
+        let request_payload = OpenAIChatRequest {
             model: model_name.to_string(),
             messages,
-            options,
+            temperature,
             stream: false, // 设置 false 获取完整响应，而不是流式响应
         };
 
@@ -187,43 +200,57 @@ index 83db48f..2c6f1f0 100644
         }
 
         let client = reqwest::Client::new();
-        let response = client
-            .post(ollama_api_url)
+        let openai_response = client
+            .post(openai_api_url)
             .json(&request_payload) // reqwest 会自动设置 Content-Type: application/json
             .send()
             .await?;
-        println!("ollama_api_url: {}", ollama_api_url);
+
         let mut ai_generated_message = "".to_string();
-        println!("response message: {}", response.text().await?);
-        // if response.status().is_success() {
-        //     let ollama_response = response.json::<OllamaChatResponse>().await?;
-        //     println!("\n--- Ollama Response ---");
-        //     println!("Model: {}", ollama_response.model);
-        //     println!("Created At: {}", ollama_response.created_at);
-        //     println!("Assistant's Reply: {}", ollama_response.message.content);
-        //     println!("Done: {}", ollama_response.done);
-        //     ai_generated_message.push_str(ollama_response.message.content.as_str());
+        if openai_response.status().is_success() {
+            match openai_response.json::<OpenAIChatCompletionResponse>().await {
+                Ok(response) => {
+                    if let Some(fp) = response.system_fingerprint {
+                        println!("System Fingerprint: {}", fp);
+                    }
+                    if let Some(choice) = response.choices.get(0) {
+                        println!("Finish Reason: {}", choice.finish_reason);
+                        println!(
+                            "Assistant's Reply (Role: {}):\n{}",
+                            choice.message.role, choice.message.content
+                        );
+                        ai_generated_message.push_str(&choice.message.content);
+                    } else {
+                        println!("No choices found in response.");
+                    }
+                    println!("\nUsage:");
+                    println!("  Prompt Tokens: {}", response.usage.prompt_tokens);
+                    println!("  Completion Tokens: {}", response.usage.completion_tokens);
+                    println!("  Total Tokens: {}", response.usage.total_tokens);
+                }
+                Err(e) => {
+                    eprintln!("Failed to parse JSON response: {}", e);
+                    // 如果解析失败，尝试打印原始文本以帮助调试
+                    // let raw_text = response.text().await.unwrap_or_else(|_| "Failed to get raw text".to_string());
+                    // eprintln!("Raw response text: {}", raw_text);
+                }
+            }
+        }
 
-        //     if ai_generated_message.trim().is_empty() {
-        //         "chore: no changes detected by AI".to_string()
-        //     } else {
-        //         // Simulate AI processing
-        //         format!(
-        //             "AI Generated: feat: Implement feature based on changes\n\nDetails:\n{}",
-        //             summarize_diff(&diff)
-        //         )
-        //     };
+        if ai_generated_message.trim().is_empty() {
+            "chore: no changes detected by AI".to_string()
+        } else {
+            // Simulate AI processing
+            format!(
+                "AI Generated: feat: Implement feature based on changes\n\nDetails:\n{}",
+                summarize_diff(&diff)
+            )
+        };
 
-        //     println!(
-        //         "AI Generated: Message: \n---\n{}\n---",
-        //         ai_generated_message
-        //     );
-        // } else {
-        //     println!("\n--- Error from Ollama ---");
-        //     println!("Status: {}", response.status());
-        //     let error_body = response.text().await?;
-        //     println!("Body: {}", error_body);
-        // }
+        println!(
+            "AI Generated: Message: \n---\n{}\n---",
+            ai_generated_message
+        );
 
         // 3.Execute git commit with the AI-generated message
         let mut commit_command = Command::new("git");

@@ -104,7 +104,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn handle_commit(args: CommitArgs) -> Result<(), Box<dyn std::error::Error>> {
     if args.ai {
-        println!("AI flag detected. Attempting to generate commit message...");
+        // println!("AI flag detected. Attempting to generate commit message...");
 
         // 1. Get staged changes using `git diff --staged`
         let diff_output = Command::new("git").arg("diff").arg("--staged").output()?;
@@ -169,8 +169,6 @@ index 83db48f..2c6f1f0 100644
 "#,
             diff.trim()
         );
-        println!("diff info: {}", diff.trim());
-        println!("user prompt: {}", user_prompt);
         let messages = vec![
             ChatMessage {
                 role: "system".to_string(),
@@ -194,10 +192,10 @@ index 83db48f..2c6f1f0 100644
         };
 
         // 打印将要发送的JSON payload (可选，用于调试)
-        match serde_json::to_string_pretty(&request_payload) {
-            Ok(json_string) => println!("Sending JSON payload:\n{}", json_string),
-            Err(e) => eprintln!("Error serializing request: {}", e),
-        }
+        // match serde_json::to_string_pretty(&request_payload) {
+        //     Ok(json_string) => println!("Sending JSON payload:\n{}", json_string),
+        //     Err(e) => eprintln!("Error serializing request: {}", e),
+        // }
 
         let client = reqwest::Client::new();
         let openai_response = client
@@ -210,23 +208,11 @@ index 83db48f..2c6f1f0 100644
         if openai_response.status().is_success() {
             match openai_response.json::<OpenAIChatCompletionResponse>().await {
                 Ok(response) => {
-                    if let Some(fp) = response.system_fingerprint {
-                        println!("System Fingerprint: {}", fp);
-                    }
                     if let Some(choice) = response.choices.get(0) {
-                        println!("Finish Reason: {}", choice.finish_reason);
-                        println!(
-                            "Assistant's Reply (Role: {}):\n{}",
-                            choice.message.role, choice.message.content
-                        );
                         ai_generated_message.push_str(&choice.message.content);
                     } else {
                         println!("No choices found in response.");
                     }
-                    println!("\nUsage:");
-                    println!("  Prompt Tokens: {}", response.usage.prompt_tokens);
-                    println!("  Completion Tokens: {}", response.usage.completion_tokens);
-                    println!("  Total Tokens: {}", response.usage.total_tokens);
                 }
                 Err(e) => {
                     eprintln!("Failed to parse JSON response: {}", e);
@@ -248,7 +234,7 @@ index 83db48f..2c6f1f0 100644
         };
 
         println!(
-            "AI Generated: Message: \n---\n{}\n---",
+            "\n\n\nAI Generated: Message: \n---\n{}\n---",
             ai_generated_message
         );
 
@@ -273,7 +259,7 @@ index 83db48f..2c6f1f0 100644
         }
     } else if let Some(message) = args.message {
         // Standard commit with user-provided message
-        println!("Standard commit with message: {}", message);
+        // println!("Standard commit with message: {}", message);
         let mut commit_command = Command::new("git");
         commit_command.arg("commit");
         commit_command.arg("-m");

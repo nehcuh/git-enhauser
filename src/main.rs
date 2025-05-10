@@ -1,7 +1,49 @@
 use clap::Parser;
+use serde::{Deserialize, Serialize};
 use std::env;
 use std::io::Write;
 use std::process::Command;
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct ChatMessage {
+    role: String,
+    content: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct OllamaOptions {
+    temperature: f32,
+    // 你可以在这里添加其他 ollama 支持选项，例如 top_p, top_k 等
+    // num_ctx: Option<u32>
+    // seed: Option<i32>
+}
+
+// 定义发送到Ollama /api/chat端点的请求体结构体
+#[derive(Serialize, Debug)]
+struct OllamaChatRequest {
+    model: String,
+    messages: Vec<ChatMessage>,
+    options: OllamaOptions,
+    stream: bool,
+}
+
+// 定义从 Ollama /api/chat 接受的响应消息结构体
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct OllamaResponseMessage {
+    role: String,
+    content: String,
+}
+
+// 定义从 Ollama /api/chat 接收的完整响应结构体 (stream: false)
+#[derive(Deserialize, Debug)]
+struct OllamaChatResponse {
+    model: String,
+    created_at: String,
+    message: OllamaResponseMessage,
+    done: bool,
+    #[serde(flatten)]
+    extra: std::collections::HashMap<String, serde_json::Value>,
+}
 
 #[derive(Parser, Debug)]
 #[clap(author="Huchen", version="0.1.0", about="Enhances Git with AI support", long_about=None)]
@@ -32,7 +74,8 @@ struct CommitArgs {
     passthrough_args: Vec<String>,
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // This is a simple way to check if we are in a git repository.
     // A more robust check might involve `git rev-parse --is-inside-work-tree`.
     if !env::current_dir()?.join(".git").exists() {
@@ -41,11 +84,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let cli = Cli::parse();
+    match cli.command {
+        GitCommands::Commit(args) => {
+            handle_commit(args).await?;
+        }
+    }
 
     Ok(())
 }
 
-fn handle_commit(args: CommitArgs) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_commit(args: CommitArgs) -> Result<(), Box<dyn std::error::Error>> {
     if args.ai {
         println!("AI flag detected. Attempting to generate commit message...");
 
@@ -71,32 +119,115 @@ fn handle_commit(args: CommitArgs) -> Result<(), Box<dyn std::error::Error>> {
         // 2.Send diff to AI (Simulated for now)
         // In a real scenario, you would make an HTTP request here.
         // For example, using `reqwest`
-        // let client = reqwest::Client::new();
-        // let res = client.post("YOUR_AI_ENDPOINT")
-        //                 .json(&serde_json::json!({"diff": diff}))
-        //                 .send()
-        //                 .await?
-        //                 .json::<AiResponse>()
-        // let ai_generated_message = res.commit_message;
+        let ollama_api_url = "http://localhost:11434/v1/api/chat/completions";
+        let model_name = "qwen3:32b-q8_0";
+        let system_prompt = r#"
+**系统提示（System Prompt）**:
 
-        let ai_generated_message = if diff.trim().is_empty() {
-            "chore: no changes detected by AI".to_string()
-        } else {
-            // Simulate AI processing
-            format!(
-                "AI Generated: feat: Implement feature based on changes\n\nDetails:\n{}",
-                summarize_diff(&diff)
-            )
+你是一个智能助手，能够根据给定的代码变更生成清晰、简洁的 Git commit 信息。请根据以下信息生成适当的 commit 信息：
+
+**输入信息**:
+-  Git diff 信息（显示哪些文件被修改、添加或删除，以及具体的代码变化）
+
+**要求**:
+1. 提供简洁明了的描述，概括主要的变更内容。
+2. 使用动词开头，描述变更的目的（例如：修复、添加、更新、删除）。
+3. 如果适用，包含相关的上下文或背景信息。
+4. 避免使用技术术语，确保描述易于理解。
+
+**示例输入**:
+```
+diff --git a/example.py b/example.py
+index 83db48f..2c6f1f0 100644
+--- a/example.py
++++ b/example.py
+@@ -1,5 +1,5 @@
+ def add(a, b):
+-     return a + b
++    return a + b + 1  # 增加了1以满足新的需求
+```
+
+**示例输出**:
+```
+更新 add 函数以满足新的需求，返回值增加1。
+```
+"#;
+        let user_prompt = r#"
+这里是 git diff 信息：
+{diff.trim()}
+请帮我生成合适的 commit 信息
+"#;
+        let messages = vec![
+            ChatMessage {
+                role: "system".to_string(),
+                content: system_prompt.to_string(),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: user_prompt.to_string(),
+            },
+        ];
+
+        // 构建请求选项
+        let temperature = 0.7;
+        let options = OllamaOptions { temperature };
+
+        // 构建请求体
+        let request_payload = OllamaChatRequest {
+            model: model_name.to_string(),
+            messages,
+            options,
+            stream: false, // 设置 false 获取完整响应，而不是流式响应
         };
 
-        println!(
-            "AI Generated: Message: \n---\n{}\n---",
-            ai_generated_message
-        );
+        // 打印将要发送的JSON payload (可选，用于调试)
+        match serde_json::to_string_pretty(&request_payload) {
+            Ok(json_string) => println!("Sending JSON payload:\n{}", json_string),
+            Err(e) => eprintln!("Error serializing request: {}", e),
+        }
+
+        let client = reqwest::Client::new();
+        let response = client
+            .post(ollama_api_url)
+            .json(&request_payload) // reqwest 会自动设置 Content-Type: application/json
+            .send()
+            .await?;
+        println!("ollama_api_url: {}", ollama_api_url);
+        let mut ai_generated_message = "".to_string();
+        println!("response message: {}", response.text().await?);
+        // if response.status().is_success() {
+        //     let ollama_response = response.json::<OllamaChatResponse>().await?;
+        //     println!("\n--- Ollama Response ---");
+        //     println!("Model: {}", ollama_response.model);
+        //     println!("Created At: {}", ollama_response.created_at);
+        //     println!("Assistant's Reply: {}", ollama_response.message.content);
+        //     println!("Done: {}", ollama_response.done);
+        //     ai_generated_message.push_str(ollama_response.message.content.as_str());
+
+        //     if ai_generated_message.trim().is_empty() {
+        //         "chore: no changes detected by AI".to_string()
+        //     } else {
+        //         // Simulate AI processing
+        //         format!(
+        //             "AI Generated: feat: Implement feature based on changes\n\nDetails:\n{}",
+        //             summarize_diff(&diff)
+        //         )
+        //     };
+
+        //     println!(
+        //         "AI Generated: Message: \n---\n{}\n---",
+        //         ai_generated_message
+        //     );
+        // } else {
+        //     println!("\n--- Error from Ollama ---");
+        //     println!("Status: {}", response.status());
+        //     let error_body = response.text().await?;
+        //     println!("Body: {}", error_body);
+        // }
 
         // 3.Execute git commit with the AI-generated message
         let mut commit_command = Command::new("git");
-        commit_command.arg("commint");
+        commit_command.arg("commit");
         commit_command.arg("-m");
         commit_command.arg(&ai_generated_message);
 

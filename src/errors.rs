@@ -1,4 +1,5 @@
 use std::io;
+use std::process::ExitStatus; // For GitError::PassthroughFailed
 
 // General Application Error
 #[derive(Debug)]
@@ -7,7 +8,7 @@ pub enum AppError {
     Git(GitError),
     AI(AIError),
     Io(String, io::Error), // For general I/O errors not covered by specific types
-    // Add other top-level error categories as needed
+    Generic(String),       // For simple string-based errors
 }
 
 impl std::fmt::Display for AppError {
@@ -17,6 +18,7 @@ impl std::fmt::Display for AppError {
             AppError::Git(e) => write!(f, "Git command error: {}", e),
             AppError::AI(e) => write!(f, "AI interaction error: {}", e),
             AppError::Io(context, e) => write!(f, "I/O error while {}: {}", context, e),
+            AppError::Generic(s) => write!(f, "Application error: {}", s),
         }
     }
 }
@@ -28,17 +30,18 @@ impl std::error::Error for AppError {
             AppError::Git(e) => Some(e),
             AppError::AI(e) => Some(e),
             AppError::Io(_, e) => Some(e),
+            AppError::Generic(_) => None,
         }
     }
 }
 
-// Configuration Errors (moved from config.rs)
+// Configuration Errors
 #[derive(Debug)]
 pub enum ConfigError {
     FileRead(String, io::Error),
     JsonParse(String, serde_json::Error),
     PromptFileMissing(String),
-    GitConfigRead(String, io::Error), // For reading .git/config or similar
+    GitConfigRead(String, io::Error),
 }
 
 impl std::fmt::Display for ConfigError {
@@ -66,18 +69,28 @@ impl std::error::Error for ConfigError {
 // Git Command Errors
 #[derive(Debug)]
 pub enum GitError {
-    CommandFailed(String, Option<i32>, String, String), // command, status_code, stdout, stderr
-    DiffError(io::Error),
+    CommandFailed {
+        command: String,
+        status_code: Option<i32>,
+        stdout: String,
+        stderr: String,
+    },
+    PassthroughFailed { // For commands where output is not captured (used .status())
+        command: String,
+        status_code: Option<i32>,
+    },
+    DiffError(io::Error), // Changed to io::Error as it's more idiomatic
     NotARepository,
     NoStagedChanges,
+    Other(String), // Generic Git error
 }
 
 impl std::fmt::Display for GitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            GitError::CommandFailed(cmd, code, stdout, stderr) => {
-                write!(f, "Git command '{}' failed", cmd)?;
-                if let Some(c) = code {
+            GitError::CommandFailed { command, status_code, stdout, stderr } => {
+                write!(f, "Git command '{}' failed", command)?;
+                if let Some(c) = status_code {
                     write!(f, " with exit code {}", c)?;
                 }
                 if !stdout.is_empty() {
@@ -88,9 +101,17 @@ impl std::fmt::Display for GitError {
                 }
                 Ok(())
             }
+            GitError::PassthroughFailed { command, status_code } => {
+                write!(f, "Git passthrough command '{}' failed", command)?;
+                if let Some(c) = status_code {
+                    write!(f, " with exit code {}", c)?;
+                }
+                Ok(())
+            }
             GitError::DiffError(e) => write!(f, "Failed to get git diff: {}", e),
             GitError::NotARepository => write!(f, "Not a git repository (or any of the parent directories)."),
             GitError::NoStagedChanges => write!(f, "No changes staged for commit."),
+            GitError::Other(s) => write!(f, "Git error: {}", s),
         }
     }
 }
@@ -108,10 +129,13 @@ impl std::error::Error for GitError {
 #[derive(Debug)]
 pub enum AIError {
     RequestFailed(reqwest::Error),
-    ResponseParseFailed(reqwest::Error), // Error during response.json()
+    ResponseParseFailed(reqwest::Error),
     ApiResponseError(reqwest::StatusCode, String), // HTTP status was not success, String is response body
     NoChoiceInResponse,
     EmptyMessage,
+    ExplanationGenerationFailed(String), // For errors from ai_explainer
+    ExplainerConfigurationError(String), // For config errors specific to explainer
+    ExplainerNetworkError(String),       // For network errors from explainer not covered by reqwest::Error
 }
 
 impl std::fmt::Display for AIError {
@@ -122,6 +146,9 @@ impl std::fmt::Display for AIError {
             AIError::ApiResponseError(status, body) => write!(f, "AI API responded with error {}: {}", status, body),
             AIError::NoChoiceInResponse => write!(f, "AI API response contained no choices."),
             AIError::EmptyMessage => write!(f, "AI returned an empty message."),
+            AIError::ExplanationGenerationFailed(s) => write!(f, "AI explanation generation failed: {}", s),
+            AIError::ExplainerConfigurationError(s) => write!(f, "AI explainer configuration error: {}", s),
+            AIError::ExplainerNetworkError(s) => write!(f, "AI explainer network error: {}", s),
         }
     }
 }
@@ -131,13 +158,13 @@ impl std::error::Error for AIError {
         match self {
             AIError::RequestFailed(e) => Some(e),
             AIError::ResponseParseFailed(e) => Some(e),
-            AIError::ApiResponseError(_, _) => None,
-            _ => None,
+            _ => None, // Other variants are self-contained or wrap String
         }
     }
 }
 
-// Converters from specific errors to AppError
+// --- From implementations for AppError ---
+
 impl From<ConfigError> for AppError {
     fn from(err: ConfigError) -> AppError {
         AppError::Config(err)
@@ -156,45 +183,44 @@ impl From<AIError> for AppError {
     }
 }
 
-// For convenience, if a function can return io::Error directly
 impl From<io::Error> for AppError {
     fn from(err: io::Error) -> AppError {
-        AppError::Io("unknown context".to_string(), err) // Encourage more specific context
+        // Provide a default context, but encourage more specific mapping where possible
+        AppError::Io("I/O operation failed".to_string(), err)
     }
 }
-// Add From<reqwest::Error> and From<serde_json::Error> if needed directly in AppError context
-// Or handle them within specific error types like AIError or ConfigError.
 
-// Helper for converting Command output to GitError
+// Helper for converting Command output to GitError when output is captured
 pub fn map_command_error(
     cmd_str: &str,
-    output: std::process::Output,
-    status: std::process::ExitStatus,
+    output: std::process::Output, // Takes ownership
+    status: ExitStatus, // Provided separately as output is consumed for stdout/stderr
 ) -> GitError {
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    GitError::CommandFailed(cmd_str.to_string(), status.code(), stdout, stderr)
+    GitError::CommandFailed {
+        command: cmd_str.to_string(),
+        status_code: status.code(),
+        stdout,
+        stderr,
+    }
 }
+
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io;
 
-    // Helper to create a dummy reqwest::Error
-    // reqwest::Error is non-exhaustive. We generate one by causing a proxy parsing error.
     fn mock_reqwest_error() -> reqwest::Error {
-        // Intentionally use a URL that will cause a parsing error when creating the proxy.
-        // reqwest::Proxy::all itself returns Result<Proxy, reqwest::Error>
-        let invalid_proxy_url = "::not_a_valid_url::"; // This is not a valid URL format.
-        match reqwest::Proxy::all(invalid_proxy_url) {
-            Ok(_) => panic!("Proxy::all should have failed for the invalid URL: {}", invalid_proxy_url),
-            Err(e) => e, // This 'e' is the reqwest::Error we want
-        }
+        // This is a reliable way to get a reqwest::Error:
+        // try to connect to a non-routable address.
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            reqwest::Client::new().get("http://0.0.0.0.0.0.1").send().await.unwrap_err()
+        })
     }
 
-    // Helper to create a dummy serde_json::Error
-    // serde_json::Error is also somewhat complex. We'll simulate a parsing error.
     fn mock_serde_json_error() -> serde_json::Error {
         serde_json::from_str::<serde_json::Value>("{invalid_json").err().unwrap()
     }
@@ -212,7 +238,6 @@ mod tests {
         );
 
         let err_json_parse = ConfigError::JsonParse(file_name.clone(), json_err);
-        // The exact format of serde_json::Error can vary, so we check for key parts.
         assert!(format!("{}", err_json_parse)
             .starts_with("Failed to parse JSON from file 'test_config.json': "));
 
@@ -232,8 +257,8 @@ mod tests {
 
     #[test]
     fn test_git_error_display() {
-        let io_err = io::Error::new(io::ErrorKind::Other, "diff generation failed");
-        let err_diff = GitError::DiffError(io_err);
+        let io_err_for_diff = io::Error::new(io::ErrorKind::Other, "diff generation failed");
+        let err_diff = GitError::DiffError(io_err_for_diff);
         assert_eq!(
             format!("{}", err_diff),
             "Failed to get git diff: diff generation failed"
@@ -248,44 +273,48 @@ mod tests {
         let err_no_staged = GitError::NoStagedChanges;
         assert_eq!(format!("{}", err_no_staged), "No changes staged for commit.");
 
-        let err_cmd_failed_simple = GitError::CommandFailed("git version".to_string(), Some(128), "".to_string(), "fatal error".to_string());
-        let actual_str_simple = format!("{}", err_cmd_failed_simple);
-        let expected_str_simple = "Git command 'git version' failed with exit code 128\nStderr:\nfatal error";
-
-        // Debugging prints for err_cmd_failed_simple
-        println!("Actual simple bytes: {:?}", actual_str_simple.as_bytes());
-        println!("Expected simple bytes: {:?}", expected_str_simple.as_bytes());
+        let err_cmd_failed_simple = GitError::CommandFailed {
+            command: "git version".to_string(),
+            status_code: Some(128),
+            stdout: "".to_string(),
+            stderr: "fatal error".to_string(),
+        };
+        assert_eq!(
+            format!("{}", err_cmd_failed_simple),
+            "Git command 'git version' failed with exit code 128\nStderr:\nfatal error"
+        );
         
-        assert_eq!(actual_str_simple, expected_str_simple);
+        let err_cmd_failed_full = GitError::CommandFailed {
+            command: "git status".to_string(),
+            status_code: Some(0), // Even if code is 0, if it's an error path, it's an error.
+            stdout: "on branch master".to_string(),
+            stderr: "warning".to_string(),
+        };
+        assert_eq!(
+            format!("{}", err_cmd_failed_full),
+            "Git command 'git status' failed with exit code 0\nStdout:\non branch master\nStderr:\nwarning"
+        );
         
-        let err_cmd_failed_full = GitError::CommandFailed("git status".to_string(), Some(0), "on branch master".to_string(), "warning".to_string());
-        let actual_str_full = format!("{}", err_cmd_failed_full);
-        let expected_str_full = "Git command 'git status' failed with exit code 0\nStdout:\non branch master\nStderr:\nwarning";
+        let err_passthrough_failed = GitError::PassthroughFailed {
+            command: "git push".to_string(),
+            status_code: Some(1),
+        };
+        assert_eq!(
+            format!("{}", err_passthrough_failed),
+            "Git passthrough command 'git push' failed with exit code 1"
+        );
 
-        // Debugging prints for err_cmd_failed_full
-        println!("Actual full bytes: {:?}", actual_str_full.as_bytes());
-        println!("Expected full bytes: {:?}", expected_str_full.as_bytes());
-
-        assert_eq!(actual_str_full, expected_str_full);
-        
-        let err_cmd_failed_no_code = GitError::CommandFailed("git pull".to_string(), None, "".to_string(), "terminated".to_string());
-        let actual_str_no_code = format!("{}", err_cmd_failed_no_code);
-        let expected_str_no_code = "Git command 'git pull' failed\nStderr:\nterminated";
-
-        // Debugging prints for err_cmd_failed_no_code
-        println!("Actual no_code bytes: {:?}", actual_str_no_code.as_bytes());
-        println!("Expected no_code bytes: {:?}", expected_str_no_code.as_bytes());
-        
-        assert_eq!(actual_str_no_code, expected_str_no_code);
+        let err_other_git = GitError::Other("Some other issue".to_string());
+        assert_eq!(format!("{}", err_other_git), "Git error: Some other issue");
     }
 
     #[test]
     fn test_ai_error_display() {
         let req_err = mock_reqwest_error();
-        let err_request_failed = AIError::RequestFailed(req_err); // req_err is moved here
+        let err_request_failed = AIError::RequestFailed(req_err);
         assert!(format!("{}", err_request_failed).starts_with("AI API request failed: "));
 
-        let parse_err = mock_reqwest_error(); // Simulate error during .json()
+        let parse_err = mock_reqwest_error(); 
         let err_response_parse_failed = AIError::ResponseParseFailed(parse_err);
         assert!(format!("{}", err_response_parse_failed).starts_with("Failed to parse AI API JSON response: "));
 
@@ -300,36 +329,49 @@ mod tests {
         
         let err_empty_message = AIError::EmptyMessage;
         assert_eq!(format!("{}", err_empty_message), "AI returned an empty message.");
+
+        let err_expl_gen = AIError::ExplanationGenerationFailed("model unavailable".to_string());
+        assert_eq!(format!("{}", err_expl_gen), "AI explanation generation failed: model unavailable");
+
+        let err_expl_conf = AIError::ExplainerConfigurationError("missing prompt".to_string());
+        assert_eq!(format!("{}", err_expl_conf), "AI explainer configuration error: missing prompt");
+
+        let err_expl_net = AIError::ExplainerNetworkError("connection refused".to_string());
+        assert_eq!(format!("{}", err_expl_net), "AI explainer network error: connection refused");
     }
 
     #[test]
     fn test_app_error_display() {
         let config_err = ConfigError::PromptFileMissing("prompts/sys".to_string());
-        let app_config_err = AppError::Config(config_err);
+        let app_config_err = AppError::from(config_err);
         assert_eq!(
             format!("{}", app_config_err),
             "Configuration error: Critical prompt file 'prompts/sys' is missing."
         );
 
         let git_err = GitError::NotARepository;
-        let app_git_err = AppError::Git(git_err);
+        let app_git_err = AppError::from(git_err);
         assert_eq!(
             format!("{}", app_git_err),
             "Git command error: Not a git repository (or any of the parent directories)."
         );
 
         let ai_err = AIError::EmptyMessage;
-        let app_ai_err = AppError::AI(ai_err);
+        let app_ai_err = AppError::from(ai_err);
         assert_eq!(
             format!("{}", app_ai_err),
             "AI interaction error: AI returned an empty message."
         );
         
         let io_err = io::Error::new(io::ErrorKind::BrokenPipe, "pipe broke");
-        let app_io_err = AppError::Io("writing to pipe".to_string(), io_err);
+        // Test the generic From<io::Error>
+        let app_io_err: AppError = io_err.into(); 
         assert_eq!(
             format!("{}", app_io_err),
-            "I/O error while writing to pipe: pipe broke"
+            "I/O error while I/O operation failed: pipe broke" // Default context
         );
+
+        let app_generic_err = AppError::Generic("Something went wrong".to_string());
+        assert_eq!(format!("{}", app_generic_err), "Application error: Something went wrong");
     }
 }

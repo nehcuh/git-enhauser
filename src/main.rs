@@ -1,236 +1,255 @@
 use clap::Parser;
 use std::env;
-use std::process::Command;
+use std::process::{Command as StdCommand, ExitStatus, Output as ProcessOutput};
 
+mod ai_explainer;
 mod ai_utils;
 mod cli;
 mod config;
 mod errors;
 
-use ai_utils::{ChatMessage, OpenAIChatCompletionResponse, OpenAIChatRequest};
-use cli::{Cli, CommitArgs, GitCommands};
+use crate::cli::{args_contain_help, CommitArgs, EnhancerSubCommand, GitEnhancerArgs};
+use ai_explainer::{explain_git_command, explain_git_command_output};
+use ai_utils::{OpenAIChatCompletionResponse, OpenAIChatRequest, ChatMessage}; 
 use config::AppConfig;
-use errors::{AppError, GitError, AIError, map_command_error};
+use errors::{AppError, GitError, AIError}; 
+
+struct CommandOutput {
+    stdout: String,
+    stderr: String,
+    status: ExitStatus,
+}
 
 fn main() {
     tracing_subscriber::fmt()
-        .with_writer(std::io::stderr) // Explicitly set stderr
+        .with_writer(std::io::stderr)
         .init();
-    if let Err(e) = tokio::runtime::Builder::new_multi_thread()
+    let result = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .unwrap()
-        .block_on(run_app())
-    {
+        .block_on(run_app());
+
+    if let Err(e) = result {
         tracing::error!("Application failed: {}", e);
-        // Consider more specific exit codes based on error type
-        std::process::exit(1);
+        let exit_code = match e {
+            AppError::Git(GitError::PassthroughFailed { status_code, .. }) => {
+                status_code.unwrap_or(128) 
+            }
+            AppError::Git(GitError::CommandFailed { status_code, .. }) => {
+                status_code.unwrap_or(128)
+            }
+            _ => 1, 
+        };
+        std::process::exit(exit_code);
     }
 }
 
 async fn run_app() -> Result<(), AppError> {
     let config = AppConfig::load()?;
-
-    // This is a simple way to check if we are in a git repository.
-    let current_dir = env::current_dir().map_err(|e| AppError::Io("Failed to get current directory".to_string(), e))?;
+    let current_dir = env::current_dir()
+        .map_err(|e| AppError::Io("Failed to get current directory".to_string(), e))?;
     if !current_dir.join(".git").exists() {
         tracing::error!("Error: Not a git repository (or any of the parent directories).");
         return Err(GitError::NotARepository.into());
     }
 
-    let cli = Cli::parse();
-    match cli.command {
-        GitCommands::Commit(args) => {
-            handle_commit(args, &config).await?;
+    let raw_cli_args: Vec<String> = std::env::args().skip(1).collect();
+    let global_ai_idx = raw_cli_args.iter().position(|arg| arg == "--ai");
+
+    if let Some(idx_of_ai) = global_ai_idx {
+        tracing::debug!("Global --ai flag detected at index {}.", idx_of_ai);
+        let mut effective_command_args: Vec<String> = raw_cli_args.clone();
+        effective_command_args.remove(idx_of_ai);
+
+        if args_contain_help(&effective_command_args) {
+            tracing::info!("Global --ai with help flag detected. Explaining Git command output...");
+            let cmd_output = execute_git_command_and_capture_output(&effective_command_args)?;
+            let mut text_to_explain = cmd_output.stdout;
+            if !cmd_output.status.success() && !cmd_output.stderr.is_empty() {
+                text_to_explain.push_str("\n--- Stderr ---\n");
+                text_to_explain.push_str(&cmd_output.stderr);
+            }
+            match explain_git_command_output(&config, &text_to_explain).await {
+                Ok(explanation) => println!("{}", explanation),
+                Err(e) => return Err(AppError::AI(e)),
+            }
+        } else {
+            let mut enhancer_args_to_parse = vec!["git-enhancer-dummy".to_string()];
+            enhancer_args_to_parse.extend_from_slice(&effective_command_args);
+            match GitEnhancerArgs::try_parse_from(&enhancer_args_to_parse) {
+                Ok(parsed_enhancer_args) => match parsed_enhancer_args.command {
+                    EnhancerSubCommand::Commit(commit_args) if commit_args.ai => {
+                        tracing::info!("Global --ai followed by 'commit --ai'. Executing AI commit message generation...");
+                        handle_commit(commit_args, &config).await?;
+                    }
+                    _ => {
+                        tracing::info!("Global --ai detected for command: git {}", effective_command_args.join(" "));
+                        match explain_git_command(&config, &effective_command_args).await {
+                            Ok(explanation) => println!("{}", explanation),
+                            Err(e) => return Err(AppError::AI(e)),
+                        }
+                    }
+                },
+                Err(_) => {
+                    tracing::info!("Global --ai detected for command: git {}", effective_command_args.join(" "));
+                    match explain_git_command(&config, &effective_command_args).await {
+                        Ok(explanation) => println!("{}", explanation),
+                        Err(e) => return Err(AppError::AI(e)),
+                    }
+                }
+            }
+        }
+    } else {
+        tracing::debug!("No global --ai flag detected.");
+        let mut args_for_enhancer_parser = vec!["git-enhancer-dummy".to_string()];
+        args_for_enhancer_parser.extend_from_slice(&raw_cli_args);
+        match GitEnhancerArgs::try_parse_from(&args_for_enhancer_parser) {
+            Ok(parsed_args) => match parsed_args.command {
+                EnhancerSubCommand::Commit(args) => {
+                    tracing::info!("Parsed as git-enhancer commit subcommand.");
+                    handle_commit(args, &config).await?;
+                }
+            },
+            Err(_) => {
+                tracing::info!("Not recognized git-enhancer subcommand. Passing to git: git {}", raw_cli_args.join(" "));
+                passthrough_to_git(&raw_cli_args)?;
+            }
         }
     }
+    Ok(())
+}
 
+fn execute_git_command_and_capture_output(args: &[String]) -> Result<CommandOutput, AppError> {
+    let cmd_to_run = if args.is_empty() { vec!["--help".to_string()] } else { args.to_vec() };
+    tracing::debug!("Capturing output: git {}", cmd_to_run.join(" "));
+    let output = StdCommand::new("git")
+        .args(&cmd_to_run)
+        .output()
+        .map_err(|e| AppError::Io(format!("Failed to execute: git {}", cmd_to_run.join(" ")), e))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    if !output.status.success() {
+        tracing::warn!("Git cmd 'git {}' non-success {}. Stdout: [{}], Stderr: [{}]", cmd_to_run.join(" "), output.status, stdout, stderr);
+    }
+    Ok(CommandOutput { stdout, stderr, status: output.status })
+}
+
+fn passthrough_to_git(args: &[String]) -> Result<(), AppError> {
+    let command_to_run = if args.is_empty() { vec!["--help".to_string()] } else { args.to_vec() };
+    let cmd_str_log = command_to_run.join(" ");
+    tracing::debug!("Passing to system git: git {}", cmd_str_log);
+    let status = StdCommand::new("git")
+        .args(&command_to_run)
+        .status()
+        .map_err(|e| AppError::Io(format!("Failed to execute system git: git {}", cmd_str_log), e))?;
+    if !status.success() {
+        tracing::warn!("Git passthrough 'git {}' failed: {}", cmd_str_log, status);
+        return Err(AppError::Git(GitError::PassthroughFailed {
+            command: format!("git {}", cmd_str_log),
+            status_code: status.code(),
+        }));
+    }
+    Ok(())
+}
+
+fn map_output_to_git_command_error(cmd_str: &str, output: ProcessOutput) -> GitError {
+    GitError::CommandFailed {
+        command: cmd_str.to_string(),
+        status_code: output.status.code(),
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+    }
+}
+
+async fn handle_commit_passthrough(args: CommitArgs, context_msg: String) -> Result<(), AppError> { 
+    tracing::info!("Commit passthrough {}: msg: {:?}, args: {:?}", context_msg, args.message, args.passthrough_args);
+    let mut cmd_builder = StdCommand::new("git");
+    cmd_builder.arg("commit");
+    if let Some(message) = &args.message {
+        cmd_builder.arg("-m").arg(message);
+    }
+    for arg in &args.passthrough_args {
+        cmd_builder.arg(arg);
+    }
+    let cmd_desc = format!("commit (passthrough {}) args: {:?}", context_msg, args.passthrough_args);
+    let status = cmd_builder.status()
+        .map_err(|e| AppError::Io(format!("Failed git {}", cmd_desc), e))?;
+    if !status.success() {
+        tracing::error!("Passthrough git {} failed with status {}", cmd_desc, status);
+        return Err(AppError::Git(GitError::PassthroughFailed {
+            command: format!("git {}", cmd_desc),
+            status_code: status.code(),
+        }));
+    }
+    tracing::info!("Passthrough git {} initiated/completed successfully.", cmd_desc);
     Ok(())
 }
 
 async fn handle_commit(args: CommitArgs, config: &AppConfig) -> Result<(), AppError> {
     if args.ai {
-        tracing::info!("AI flag detected. Attempting to generate commit message...");
-
-        // 1. Get staged changes using `git diff --staged`
-        let diff_cmd_output = Command::new("git")
-            .arg("diff")
-            .arg("--staged")
-            .output()
-            .map_err(|e| GitError::DiffError(e))?;
-
-        if !diff_cmd_output.status.success() {
-            let err_msg = format!("Error getting git diff. Is anything staged for commit?");
-            tracing::error!("{}", err_msg);
-            // Log stderr from the command as well
-            let stderr_output = String::from_utf8_lossy(&diff_cmd_output.stderr);
-            tracing::debug!("git diff stderr: {}", stderr_output);
-            let status = diff_cmd_output.status;
-            return Err(map_command_error("git diff --staged", diff_cmd_output, status).into());
+        tracing::info!("AI commit: Attempting to generate message...");
+        let diff_out = StdCommand::new("git").arg("diff").arg("--staged").output()
+            .map_err(|e| AppError::Git(GitError::DiffError(e)))?;
+        if !diff_out.status.success() {
+            tracing::error!("Error getting git diff. Is anything staged for commit?");
+            return Err(map_output_to_git_command_error("git diff --staged", diff_out).into());
         }
-
-        let diff = String::from_utf8_lossy(&diff_cmd_output.stdout);
-
+        let diff = String::from_utf8_lossy(&diff_out.stdout);
         if diff.trim().is_empty() {
-            tracing::info!("No changes staged for commit. Nothing for AI to process.");
-            // Optionally, proceed with a normal commit if other args are present,
-            // or exit. For now, we'll just inform and let git handle it if it proceeds.
-        } else {
-            tracing::debug!("Staged changes:\\n{}", diff);
+            tracing::info!("AI commit: No staged changes. Checking for --allow-empty.");
+            if args.passthrough_args.contains(&"--allow-empty".to_string()) {
+                let passthrough_commit_args = CommitArgs {
+                     ai: false, 
+                     message: None, 
+                     passthrough_args: args.passthrough_args.clone(),
+                 };
+                return handle_commit_passthrough(passthrough_commit_args, "(AI commit with --allow-empty and no diff)".to_string()).await;
+            } else {
+                return Err(AppError::Git(GitError::NoStagedChanges));
+            }
         }
-
-        // 2.Send diff to AI
-        let openai_api_url = &config.api_url;
-        let model_name = &config.model_name;
-        let system_prompt = &config.system_prompt;
-
-        let user_prompt = format!(
-            r#"
-这里是 git diff 信息：
-{}
-请帮我生成合适的 commit 信息
-"#,
-            diff.trim()
-        );
+        tracing::debug!("Staged changes for AI:\n{}", diff);
+        let user_prompt = format!("Git diff:\n{}\nGenerate commit message.", diff.trim());
         let messages = vec![
-            ChatMessage {
-                role: "system".to_string(),
-                content: system_prompt.to_string(),
-            },
-            ChatMessage {
-                role: "user".to_string(),
-                content: user_prompt,
-            },
+            ChatMessage { role: "system".to_string(), content: config.system_prompt.clone() },
+            ChatMessage { role: "user".to_string(), content: user_prompt },
         ];
-
-        // 构建请求选项
-        let temperature = Some(config.temperature);
-
-        // 构建请求体
-        let request_payload = OpenAIChatRequest {
-            model: model_name.to_string(),
-            messages,
-            temperature,
-            stream: false, // 设置 false 获取完整响应，而不是流式响应
-        };
-
-        // 打印将要发送的JSON payload (可选，用于调试)
-        match serde_json::to_string_pretty(&request_payload) {
-            Ok(json_string) => tracing::debug!("Sending JSON payload:\\n{}", json_string),
-            Err(e) => tracing::warn!("Error serializing request: {}", e),
-        }
-
-        let client = reqwest::Client::new();
-        let openai_response = client
-            .post(openai_api_url)
-            .json(&request_payload) // reqwest 会自动设置 Content-Type: application/json
-            .send()
-            .await
-            .map_err(AIError::RequestFailed)?;
-
-        let mut ai_generated_message = "".to_string();
-
-        if !openai_response.status().is_success() {
-            let status = openai_response.status();
-            let body = openai_response.text().await.unwrap_or_else(|_| "Failed to read error body".to_string());
-            tracing::error!("AI API request failed with status {}: {}", status, body);
-            return Err(AIError::ApiResponseError(status, body).into());
-        }
-
-        // Now that we know status is success, try to parse
-        match openai_response.json::<OpenAIChatCompletionResponse>().await {
-            Ok(response) => {
-                if let Some(choice) = response.choices.get(0) {
-                    let original_content = &choice.message.content;
-                    let cleaned_content = ai_utils::clean_ai_output(original_content);
-                    ai_generated_message.push_str(&cleaned_content);
-                } else {
-                    tracing::warn!("No choices found in AI response.");
-                    return Err(AIError::NoChoiceInResponse.into());
-                }
-            }
-            Err(e) => {
-                tracing::error!("Failed to parse successful JSON response from AI: {}", e);
-                // It's possible the body was already consumed by .json(), or if not, log it here
-                // let raw_text = openai_response.text().await.unwrap_or_else(|_| "Failed to get raw text".to_string());
-                // tracing::debug!("Raw AI response text: {}", raw_text);
-                return Err(AIError::ResponseParseFailed(e).into());
-            }
-        }
-
-        let final_commit_message = if ai_generated_message.trim().is_empty() {
-            tracing::warn!("AI returned an empty message.");
-            return Err(AIError::EmptyMessage.into());
-        } else {
-            // The old placeholder logic:
-            // format!(
-            //     "AI Generated: feat: Implement feature based on changes\\n\\nDetails:\\n{}",
-            //     summarize_diff(&diff)
-            // )
-            // Now we directly use ai_generated_message
-            ai_generated_message.trim().to_string()
-        };
-
-        tracing::info!(
-            "AI Generated Message: \\n---\\n{}\\n---",
-            final_commit_message
-        );
-
-        // 3.Execute git commit with the AI-generated message
-        let mut commit_command_builder = Command::new("git");
-        commit_command_builder.arg("commit");
-        commit_command_builder.arg("-m");
-        commit_command_builder.arg(&final_commit_message); // Use the processed message
-
-        // Add any passthrough arguments
-        for arg in &args.passthrough_args { // Iterate over reference
-            commit_command_builder.arg(arg);
-        }
+        let req_payload = OpenAIChatRequest { model: config.model_name.clone(), messages, temperature: Some(config.temperature), stream: false };
+        if let Ok(json_str) = serde_json::to_string_pretty(&req_payload) { tracing::debug!("AI req:\n{}", json_str); }
         
-        let commit_output = commit_command_builder.output().map_err(|e| AppError::Io("Failed to execute git commit".to_string(), e))?;
+        let client = reqwest::Client::new();
+        let mut builder = client.post(&config.api_url);
+        if let Some(key) = &config.api_key { builder = builder.bearer_auth(key); }
+        let ai_resp = builder.json(&req_payload).send().await.map_err(AIError::RequestFailed)?;
+        
+        if !ai_resp.status().is_success() {
+            let code = ai_resp.status();
+            let body = ai_resp.text().await.unwrap_or_else(|_| "<no body>".into());
+            tracing::error!("AI API request failed with status {}: {}", code, body);
+            return Err(AppError::AI(AIError::ApiResponseError(code, body)));
+        }
+        let resp_data = ai_resp.json::<OpenAIChatCompletionResponse>().await.map_err(AIError::ResponseParseFailed)?;
+        let ai_msg = resp_data.choices.get(0).map_or("", |c| &c.message.content);
+        let final_msg = ai_utils::clean_ai_output(ai_msg).trim().to_string();
 
-        if !commit_output.status.success() {
-            tracing::error!("Git commit command failed.");
-            let status = commit_output.status;
-            return Err(map_command_error(&format!("git commit -m \\\"{}\\\" {}", final_commit_message, args.passthrough_args.join(" ")), commit_output, status).into());
-        } else {
-            tracing::info!("Successfully committed with AI-generated message.");
+        if final_msg.is_empty() { 
+            tracing::error!("AI returned an empty message.");
+            return Err(AppError::AI(AIError::EmptyMessage)); 
         }
-    } else if let Some(message) = args.message {
-        // Standard commit with user-provided message
-        tracing::info!("Standard commit with message: {}", message);
-        let mut commit_command_builder = Command::new("git");
-        commit_command_builder.arg("commit");
-        commit_command_builder.arg("-m");
-        commit_command_builder.arg(&message);
-        for arg in &args.passthrough_args {
-            commit_command_builder.arg(arg);
+        tracing::info!("AI Message:\n---\n{}\n---", final_msg);
+
+        let mut cmd_builder = StdCommand::new("git");
+        cmd_builder.arg("commit").arg("-m").arg(&final_msg);
+        for p_arg in &args.passthrough_args { cmd_builder.arg(p_arg); }
+        let commit_out = cmd_builder.output().map_err(|e| AppError::Io("AI commit failed".into(), e))?;
+        if !commit_out.status.success() {
+            tracing::error!("Git commit command with AI message failed.");
+            return Err(map_output_to_git_command_error("git commit -m <AI>", commit_out).into());
         }
-        let commit_output = commit_command_builder.output().map_err(|e| AppError::Io("Failed to execute git commit".to_string(), e))?;
-        if !commit_output.status.success() {
-            tracing::error!("Git commit command failed.");
-            let status = commit_output.status;
-            return Err(map_command_error(&format!("git commit -m \\\"{}\\\" {}", message, args.passthrough_args.join(" ")), commit_output, status).into());
-        } else {
-            tracing::info!("Successfully committed with provided message.");
-        }
+        tracing::info!("Successfully committed with AI message.");
     } else {
-        // Standard commit, let git open an editor or fail if no message
-        tracing::info!("Standard commit (no message provided to enhancer, forwarding to git)...");
-        let mut commit_command_builder = Command::new("git");
-        commit_command_builder.arg("commit");
-        for arg in &args.passthrough_args {
-            commit_command_builder.arg(arg);
-        }
-        let commit_output = commit_command_builder.output().map_err(|e| AppError::Io("Failed to execute git commit".to_string(), e))?;
-        if !commit_output.status.success() {
-            tracing::error!("Git commit command failed.");
-            let status = commit_output.status;
-            return Err(map_command_error(&format!("git commit {}", args.passthrough_args.join(" ")), commit_output, status).into());
-        } else {
-            tracing::info!("Git commit process initiated.");
-        }
+        return handle_commit_passthrough(args, "(standard commit)".to_string()).await;
     }
-
     Ok(())
 }

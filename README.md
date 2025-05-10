@@ -7,6 +7,7 @@
 -   **AI-Powered Commit Messages**: Automatically generates commit messages using a large language model (LLM) by analyzing your staged diff.
 -   **Standard Git Commit Passthrough**: Seamlessly integrates with your existing `git commit` workflow. If you don't use the AI feature, it behaves like the standard `git commit`.
 -   **Configurable**: Allows customization of the AI model, API endpoint, temperature, and system prompts.
+-   **AI-Powered Command Explanation**: Get AI-generated explanations for Git commands and their options directly in your terminal.
 -   **Tracing/Logging**: Provides detailed logs for debugging and monitoring.
 
 ## Installation
@@ -100,6 +101,62 @@ To use `git-enhancer` like the standard `git commit`:
 -   To open your configured Git editor:
     ```bash
     git-enhancer commit
+    ```
+
+### AI-Powered Command Explanation
+
+`git-enhancer` can provide AI-generated explanations for Git commands. This is primarily activated by a global `--ai` flag. The behavior adapts based on how `--ai` is used and the other arguments provided. The first `--ai` encountered in the command arguments triggers this global AI mode.
+
+**1. Explain Git Command Help Output**
+
+If you use `--ai` along with a Git command that includes a help flag (`-h` or `--help`), `git-enhancer` will first fetch the standard help text for that command and then provide an AI-generated explanation of that help text.
+
+```bash
+# Get AI explanation for the 'git status --short' help page
+git-enhancer --ai status --short --help
+
+# The --ai flag can be anywhere
+git-enhancer status -s --ai --help
+```
+
+**2. Explain Git Command Functionality**
+
+If you use `--ai` with a Git command *without* a help flag, `git-enhancer` will provide an AI-generated explanation of what that specific command and its options do. This applies if the command is not a `git-enhancer` specific subcommand that has its own AI behavior (like `commit --ai` for message generation).
+
+```bash
+# Get AI explanation for what 'git log --oneline -n 5' does
+git-enhancer --ai log --oneline -n 5
+
+# Get AI explanation for 'git commit -m "message"' (as 'commit' subcommand's own AI flag is not active)
+git-enhancer --ai commit -m "A standard commit message"
+```
+
+**Interaction with `git-enhancer commit --ai` (Message Generation):**
+
+The global `--ai` for explanation is distinct from the `--ai` flag used with `git-enhancer commit` for generating commit messages.
+
+*   **To explain `git commit --help`**:
+    ```bash
+    git-enhancer --ai commit --help
+    ```
+*   **To generate a commit message with AI (existing feature)**:
+    ```bash
+    git-enhancer commit --ai
+    ```
+*   **To explain the command `git commit --ai` itself (if `commit --ai` was a standard git command)**:
+    If `git-enhancer`'s `commit` subcommand *didn't* have its own `--ai` for message generation, `git-enhancer --ai commit --ai` would explain the `git commit --ai` command. However, because `git-enhancer commit` *does* have its own `--ai` flag for message generation, the following happens:
+    ```bash
+    git-enhancer --ai commit --ai -S
+    ```
+    Here, the first `--ai` triggers global AI mode. The remaining parts (`commit --ai -S`) are then parsed. Since `commit --ai` is a recognized `git-enhancer` AI-specific operation (message generation), that operation takes precedence over explaining the command. So, this command would generate an AI commit message for GPG-signed commits.
+
+**Standard Git Command Passthrough (No Global `--ai`)**
+
+If the global `--ai` flag is not present, `git-enhancer` behaves as follows:
+- If the command is a recognized `git-enhancer` subcommand (like `commit`), it executes that subcommand's logic (e.g., `git-enhancer commit --ai` for message generation, or `git-enhancer commit -m "..."` for standard commit).
+- If the command is not a recognized `git-enhancer` subcommand, it's passed directly to the system's `git`.
+    ```bash
+    git-enhancer status -s  # Executes 'git status -s'
     ```
 
 ### Logging

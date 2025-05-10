@@ -1,10 +1,11 @@
 # Git Enhancer
 
-`git-enhancer` 是一个命令行工具，它通过 AI 功能增强您的 Git 工作流。目前，它专注于根据您暂存的更改自动生成提交信息。
+`git-enhancer` 是一个命令行工具，它通过 AI 功能增强您的 Git 工作流。它可以自动生成提交信息，并为 Git 命令提供 AI 驱动的解释。
 
 ## 功能特性
 
 -   **AI 驱动的提交信息**：通过分析您暂存的 diff，使用大型语言模型 (LLM) 自动生成提交信息。
+-   **AI 驱动的 Git 命令解释**：直接在您的终端中获取对 Git 命令及其选项的 AI 生成的解释。
 -   **标准 Git Commit 传递**：与您现有的 `git commit` 工作流无缝集成。如果您不使用 AI 功能，它的行为与标准 `git commit` 相同。
 -   **可配置**：允许自定义 AI 模型、API 端点、temperature (温度) 和系统提示。
 -   **追踪/日志**：提供详细的日志用于调试和监控。
@@ -65,9 +66,9 @@
 
 ## 使用方法
 
-`git-enhancer` 作为 `git commit` 的包装器运行。
+`git-enhancer` 主要作为 `git commit` 的包装器运行，但也引入了一个全局的 `--ai` 标志以提供更广泛的 AI 辅助。
 
-### AI 生成的提交信息
+### 1. AI 生成的提交信息
 
 要让 AI 根据暂存的更改生成提交信息：
 
@@ -89,20 +90,60 @@
     git-enhancer commit --ai -S  # 用于 GPG 签名
     ```
 
-### 标准提交信息
+### 2. AI 驱动的命令解释与辅助 (全局 `--ai` 标志)
 
-要像使用标准 `git commit` 一样使用 `git-enhancer`：
+全局 `--ai` 标志（在参数中遇到的第一个 `--ai`）会激活 AI 辅助功能，以理解 Git 命令。任何后续的 `--ai` 标志都将被视为命令本身的一部分。
 
--   附带信息：
+**a. 解释 Git 帮助输出：**
+
+如果全局 `--ai` 存在并且命令包含 `-h` 或 `--help`，`git-enhancer` 将首先获取 Git 的标准帮助输出，然后请求 AI 解释该输出。
+
+```bash
+# 获取对 'git status --short --help' 的 AI 解释
+git-enhancer --ai status --short --help
+
+# 全局 --ai 标志可以位于参数列表的任何位置
+git-enhancer status --short --ai --help
+```
+
+**b. 解释 Git 命令功能：**
+
+如果全局 `--ai` 存在但没有 `-h` 或 `--help`，并且该命令不是 `git-enhancer` 特定的 AI 子命令（如 `commit --ai`），AI 将解释给定的 Git 命令及其选项的作用。
+
+```bash
+# 获取 AI 对 'git log --oneline -n 5' 功能的解释
+git-enhancer --ai log --oneline -n 5
+
+# 获取 AI 对 'git commit -m "..."' 功能的解释 (这不同于 AI 生成提交信息)
+git-enhancer --ai commit -m "一条标准的提交信息"
+```
+
+**c. 与 `git-enhancer` 特定的 AI 子命令的交互：**
+
+如果使用了全局 `--ai`，并且后续的命令 *是* 一个 `git-enhancer` 特定的 AI 子命令（如 `commit --ai`），则会触发该子命令的 AI 功能。
+
+```bash
+# 触发 AI 提交信息生成
+git-enhancer --ai commit --ai --all
+```
+在此示例中，第一个 `--ai` 启用了全局 AI 模式。然后，`commit --ai --all` 部分被解析为 `commit` 子命令，并且其 *自身* 的 `--ai` 标志激活了针对所有更改的 AI 信息生成。
+
+### 3. 标准提交信息 (无全局 `--ai` 时)
+
+如果不使用全局 `--ai` 标志，`git-enhancer` 的行为如下：
+
+-   **`git-enhancer` 特定子命令** (如 `commit`)：
+    -   附带信息 (透传)：`git-enhancer commit -m "您的提交信息"`
+    -   打开您配置的 Git 编辑器 (透传)：`git-enhancer commit`
+    -   调用其自身的 AI 功能：`git-enhancer commit --ai` (如第1节所述)
+-   **其他 Git 命令**：
+    如果命令不是 `git-enhancer` 可识别的子命令，它将被直接传递给系统的 `git`。
     ```bash
-    git-enhancer commit -m "您的提交信息"
-    ```
--   打开您配置的 Git 编辑器：
-    ```bash
-    git-enhancer commit
+    git-enhancer status -s  # 执行 'git status -s'
+    git-enhancer branch my-feature # 执行 'git branch my-feature'
     ```
 
-### 日志记录
+### 4. 日志记录
 
 `git-enhancer` 使用 `tracing` 进行日志记录。默认情况下，日志会打印到标准错误输出。您可以使用 `RUST_LOG` 环境变量来控制日志级别。
 

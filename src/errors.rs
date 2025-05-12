@@ -41,6 +41,7 @@ pub enum ConfigError {
     FileRead(String, io::Error),
     JsonParse(String, serde_json::Error),
     PromptFileMissing(String),
+    FieldMissing(String), // Added for missing required fields
     GitConfigRead(String, io::Error),
 }
 
@@ -50,6 +51,7 @@ impl std::fmt::Display for ConfigError {
             ConfigError::FileRead(file, e) => write!(f, "Failed to read file '{}': {}", file, e),
             ConfigError::JsonParse(file, e) => write!(f, "Failed to parse JSON from file '{}': {}", file, e),
             ConfigError::PromptFileMissing(file) => write!(f, "Critical prompt file '{}' is missing.", file),
+            ConfigError::FieldMissing(field) => write!(f, "Required configuration field '{}' is missing or invalid.", field),
             ConfigError::GitConfigRead(context, e) => write!(f, "Failed to read Git configuration for {}: {}", context, e),
         }
     }
@@ -61,6 +63,7 @@ impl std::error::Error for ConfigError {
             ConfigError::FileRead(_, e) => Some(e),
             ConfigError::JsonParse(_, e) => Some(e),
             ConfigError::PromptFileMissing(_) => None,
+            ConfigError::FieldMissing(_) => None, // Added match arm
             ConfigError::GitConfigRead(_, e) => Some(e),
         }
     }
@@ -252,6 +255,12 @@ mod tests {
         assert_eq!(
             format!("{}", err_git_config_read),
             "Failed to read Git configuration for user name: permission denied"
+        );
+
+        let err_field_missing = ConfigError::FieldMissing("model_name".to_string());
+        assert_eq!(
+            format!("{}", err_field_missing),
+            "Required configuration field 'model_name' is missing or invalid."
         );
     }
 

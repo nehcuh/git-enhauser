@@ -226,12 +226,12 @@ async fn handle_commit(args: CommitArgs, config: &AppConfig) -> Result<(), AppEr
             ChatMessage { role: "system".to_string(), content: config.system_prompt.clone() },
             ChatMessage { role: "user".to_string(), content: user_prompt },
         ];
-        let req_payload = OpenAIChatRequest { model: config.model_name.clone(), messages, temperature: Some(config.temperature), stream: false };
+        let req_payload = OpenAIChatRequest { model: config.ai.model_name.clone(), messages, temperature: Some(config.ai.temperature), stream: false };
         if let Ok(json_str) = serde_json::to_string_pretty(&req_payload) { tracing::debug!("AI req:\n{}", json_str); }
         
         let client = reqwest::Client::new();
-        let mut builder = client.post(&config.api_url);
-        if let Some(key) = &config.api_key { builder = builder.bearer_auth(key); }
+        let mut builder = client.post(&config.ai.api_url);
+        if let Some(key) = &config.ai.api_key { builder = builder.bearer_auth(key); }
         let ai_resp = builder.json(&req_payload).send().await.map_err(AIError::RequestFailed)?;
         
         if !ai_resp.status().is_success() {

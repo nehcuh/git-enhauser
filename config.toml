@@ -1,0 +1,25 @@
+# Git Enhancer Configuration File
+# 
+# This is your git-enhancer configuration file. Settings defined here will override 
+# the defaults from config.example.toml. You can customize only the settings you need to change.
+# 
+# For future-proofing, configurations are organized by service sections.
+
+[ai]
+# The API endpoint URL for your AI service
+# api_url = "https://api.your-ai-provider.com/v1/chat/completions"
+
+# The model to use for AI completions
+# model_name = "your-preferred-model"
+
+# Controls the randomness of AI responses (0.0-1.0)
+# Higher values make output more random, lower values make it more deterministic
+# temperature = 0.7
+
+# Your API key for the AI service (if required)
+# Leave empty or comment out to disable authentication
+# api_key = "YOUR_API_KEY"
+
+# [other_service]
+# This is where you can add configuration for additional services as needed
+# key = "value"

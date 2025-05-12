@@ -25,9 +25,9 @@ async fn execute_ai_request(
     messages: Vec<ChatMessage>,
 ) -> Result<String, AIError> {
     let request_payload = OpenAIChatRequest {
-        model: config.model_name.clone(),
+        model: config.ai.model_name.clone(),
         messages,
-        temperature: Some(config.temperature), // Using temperature from general AppConfig
+        temperature: Some(config.ai.temperature), // Using temperature from AI config
         stream: false,
     };
 
@@ -41,10 +41,10 @@ async fn execute_ai_request(
     }
 
     let client = reqwest::Client::new();
-    let mut request_builder = client.post(&config.api_url);
+    let mut request_builder = client.post(&config.ai.api_url);
 
     // Add Authorization header if api_key is present
-    if let Some(api_key) = &config.api_key {
+    if let Some(api_key) = &config.ai.api_key {
         if !api_key.is_empty() {
             tracing::debug!("Using API key for AI explanation request.");
             request_builder = request_builder.bearer_auth(api_key);

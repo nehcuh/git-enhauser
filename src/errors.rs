@@ -40,6 +40,7 @@ impl std::error::Error for AppError {
 pub enum ConfigError {
     FileRead(String, io::Error),
     JsonParse(String, serde_json::Error),
+    TomlParse(String, toml::de::Error),
     PromptFileMissing(String),
     FieldMissing(String), // Added for missing required fields
     GitConfigRead(String, io::Error),
@@ -50,6 +51,7 @@ impl std::fmt::Display for ConfigError {
         match self {
             ConfigError::FileRead(file, e) => write!(f, "Failed to read file '{}': {}", file, e),
             ConfigError::JsonParse(file, e) => write!(f, "Failed to parse JSON from file '{}': {}", file, e),
+            ConfigError::TomlParse(file, e) => write!(f, "Failed to parse TOML from file '{}': {}", file, e),
             ConfigError::PromptFileMissing(file) => write!(f, "Critical prompt file '{}' is missing.", file),
             ConfigError::FieldMissing(field) => write!(f, "Required configuration field '{}' is missing or invalid.", field),
             ConfigError::GitConfigRead(context, e) => write!(f, "Failed to read Git configuration for {}: {}", context, e),
@@ -62,6 +64,7 @@ impl std::error::Error for ConfigError {
         match self {
             ConfigError::FileRead(_, e) => Some(e),
             ConfigError::JsonParse(_, e) => Some(e),
+            ConfigError::TomlParse(_, e) => Some(e),
             ConfigError::PromptFileMissing(_) => None,
             ConfigError::FieldMissing(_) => None, // Added match arm
             ConfigError::GitConfigRead(_, e) => Some(e),
@@ -227,12 +230,18 @@ mod tests {
     fn mock_serde_json_error() -> serde_json::Error {
         serde_json::from_str::<serde_json::Value>("{invalid_json").err().unwrap()
     }
+    
+    fn mock_toml_error() -> toml::de::Error {
+        toml::from_str::<toml::Value>("invalid_toml").err().unwrap()
+    }
 
     #[test]
     fn test_config_error_display() {
         let file_name = "test_config.json".to_string();
+        let toml_file_name = "test_config.toml".to_string();
         let io_err = io::Error::new(io::ErrorKind::NotFound, "file not found");
         let json_err = mock_serde_json_error();
+        let toml_err = mock_toml_error();
 
         let err_file_read = ConfigError::FileRead(file_name.clone(), io_err);
         assert_eq!(
@@ -243,6 +252,10 @@ mod tests {
         let err_json_parse = ConfigError::JsonParse(file_name.clone(), json_err);
         assert!(format!("{}", err_json_parse)
             .starts_with("Failed to parse JSON from file 'test_config.json': "));
+            
+        let err_toml_parse = ConfigError::TomlParse(toml_file_name.clone(), toml_err);
+        assert!(format!("{}", err_toml_parse)
+            .starts_with("Failed to parse TOML from file 'test_config.toml': "));
 
         let err_prompt_missing = ConfigError::PromptFileMissing("prompts/my_prompt".to_string());
         assert_eq!(

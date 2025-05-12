@@ -26,6 +26,10 @@ pub struct CommitArgs {
     #[clap(long)]
     pub ai: bool,
 
+    /// Automatically stage all tracked, modified files before commit (like git commit -a).
+    #[clap(short = 'a', long = "all")]
+    pub auto_stage: bool,
+
     /// Pass a message directly to the commit.
     #[clap(short, long)]
     pub message: Option<String>,

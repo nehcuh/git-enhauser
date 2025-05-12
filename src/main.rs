@@ -177,11 +177,21 @@ async fn handle_commit_passthrough(args: CommitArgs, context_msg: String) -> Res
     tracing::info!("Commit passthrough {}: msg: {:?}, args: {:?}", context_msg, args.message, args.passthrough_args);
     let mut cmd_builder = StdCommand::new("git");
     cmd_builder.arg("commit");
+    
+    // 添加-a/--all标志（如果设置了auto_stage）
+    if args.auto_stage {
+        cmd_builder.arg("-a");
+    }
+    
     if let Some(message) = &args.message {
         cmd_builder.arg("-m").arg(message);
     }
+    
+    // 添加剩余的参数，但不包括-a和--all（已经由auto_stage处理）
     for arg in &args.passthrough_args {
-        cmd_builder.arg(arg);
+        if !(args.auto_stage && (arg == "-a" || arg == "--all" || (arg.starts_with('-') && !arg.starts_with("--") && arg.contains('a')))) {
+            cmd_builder.arg(arg);
+        }
     }
     let cmd_desc = format!("commit (passthrough {}) args: {:?}", context_msg, args.passthrough_args);
     let status = cmd_builder.status()
@@ -200,6 +210,19 @@ async fn handle_commit_passthrough(args: CommitArgs, context_msg: String) -> Res
 async fn handle_commit(args: CommitArgs, config: &AppConfig) -> Result<(), AppError> {
     if args.ai {
         tracing::info!("AI commit: Attempting to generate message...");
+        
+        // 处理自动暂存功能
+        if args.auto_stage {
+            tracing::info!("Auto-staging tracked changes due to -a/--all flag");
+            let add_result = StdCommand::new("git").arg("add").arg("-u").output()
+                .map_err(|e| AppError::Io("Failed to auto stage changes".to_string(), e))?;
+            
+            if !add_result.status.success() {
+                tracing::error!("Failed to auto-stage changes with git add -u");
+                return Err(map_output_to_git_command_error("git add -u", add_result).into());
+            }
+        }
+        
         let diff_out = StdCommand::new("git").arg("diff").arg("--staged").output()
             .map_err(|e| AppError::Git(GitError::DiffError(e)))?;
         if !diff_out.status.success() {
@@ -212,6 +235,7 @@ async fn handle_commit(args: CommitArgs, config: &AppConfig) -> Result<(), AppEr
             if args.passthrough_args.contains(&"--allow-empty".to_string()) {
                 let passthrough_commit_args = CommitArgs {
                      ai: false, 
+                     auto_stage: args.auto_stage,
                      message: None, 
                      passthrough_args: args.passthrough_args.clone(),
                  };
@@ -252,7 +276,14 @@ async fn handle_commit(args: CommitArgs, config: &AppConfig) -> Result<(), AppEr
 
         let mut cmd_builder = StdCommand::new("git");
         cmd_builder.arg("commit").arg("-m").arg(&final_msg);
-        for p_arg in &args.passthrough_args { cmd_builder.arg(p_arg); }
+        
+        // 过滤掉passthrough_args中的-a和--all参数，因为如果有auto_stage=true，效果已经实现
+        for p_arg in &args.passthrough_args {
+            if p_arg != "-a" && p_arg != "--all" && !(p_arg.starts_with('-') && !p_arg.starts_with("--") && p_arg.contains('a')) {
+                cmd_builder.arg(p_arg);
+            }
+        }
+        
         let commit_out = cmd_builder.output().map_err(|e| AppError::Io("AI commit failed".into(), e))?;
         if !commit_out.status.success() {
             tracing::error!("Git commit command with AI message failed.");

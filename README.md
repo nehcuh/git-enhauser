@@ -34,35 +34,35 @@
 
 ## Configuration
 
-`git-enhancer` uses a `config.json` file in its root directory for AI-related settings and a `prompts/commit-prompt` file for the system prompt used during commit message generation.
+`git-enhancer` uses a `config.toml` file in its root directory for AI-related settings and a `prompts/commit-prompt` file for the system prompt used during commit message generation.
 
-1.  **Create `config.json`**:
-    Copy the example configuration file `config.example.json` to `config.json` in the root of the `git-enhancer` project (or the directory where you run the executable if it's globally installed and expects the config there - this might need adjustment for global installs).
+1.  **Create `config.toml`**:
+    Copy the example configuration file `config.example.toml` to `config.toml` in the root of the `git-enhancer` project (or the directory where you run the executable if it's globally installed and expects the config there - this might need adjustment for global installs).
 
     ```bash
-    cp config.example.json config.json
+    cp config.example.toml config.toml
     ```
 
-    Edit `config.json` with your preferred settings:
-    ```json
-    {
-      "api_url": "http://localhost:11434/v1/chat/completions", // Your LLM API endpoint
-      "model_name": "qwen3:32b-q8_0",                        // The model to use
-      "temperature": 0.7,                                     // LLM temperature
-      "api_key": "YOUR_API_KEY_IF_NEEDED"                   // API key, if required by your endpoint
-    }
+    Edit `config.toml` with your preferred settings:
+    ```toml
+    [ai]
+    api_url = "http://localhost:11434/v1/chat/completions"  # Your LLM API endpoint
+    model_name = "qwen3:32b-q8_0"                           # The model to use
+    temperature = 0.7                                        # LLM temperature
+    api_key = "YOUR_API_KEY_IF_NEEDED"                       # API key, if required by your endpoint
     ```
-    *   `api_url`: The URL of your OpenAI-compatible chat completions endpoint.
-    *   `model_name`: The specific model identifier your API endpoint expects.
-    *   `temperature`: Controls the creativity of the AI. Higher values mean more creative/random, lower values mean more deterministic.
-    *   `api_key`: Your API key, if the service requires one. This is optional.
+    *   `[ai]`: Section for AI-related configuration settings
+        *   `api_url`: The URL of your OpenAI-compatible chat completions endpoint.
+        *   `model_name`: The specific model identifier your API endpoint expects.
+        *   `temperature`: Controls the creativity of the AI. Higher values mean more creative/random, lower values mean more deterministic.
+        *   `api_key`: Your API key, if the service requires one. This is optional.
 
-2.  **Customize `prompts/commit-prompt`**:
-    The `prompts/commit-prompt` file contains the system prompt given to the AI to guide its commit message generation. You can edit this file to change the style, tone, or specific requirements for your commit messages.
+    2.  **Customize `prompts/commit-prompt`**:
+        The `prompts/commit-prompt` file contains the system prompt given to the AI to guide its commit message generation. You can edit this file to change the style, tone, or specific requirements for your commit messages.
 
-    The default prompt encourages conventional commit style messages.
+        The default prompt encourages conventional commit style messages.
 
-    *Note: If `config.json` is not found, `git-enhancer` will use default values, but it will fail if `prompts/commit-prompt` is missing.*
+        *Note: If `config.toml` is not found, `git-enhancer` will use default values, but it will fail if `prompts/commit-prompt` is missing.*
 
 ## Usage
 
@@ -93,16 +93,22 @@ If no help flag is present, `git-enhancer` attempts to parse the command as one 
 
 *   **`git-enhancer commit` Subcommand:**
     This is the primary way to interact with `git-enhancer`'s own functionalities.
-    *   **AI Commit Message Generation (`commit --ai`)**: This is the core AI feature for the `commit` subcommand. It analyzes your staged changes and generates a commit message.
+    *   **AI Commit Message Generation (`commit --ai`)**: This is the core AI feature for the `commit` subcommand. It analyzes your changes and generates a commit message.
         ```bash
-        # Stage your files first
+        # If you've already staged your files:
         git add .
-        
-        # Generate AI commit message
         git-enhancer commit --ai 
-        
+    
+        # Auto-stage all tracked, modified files and generate AI commit message (like git commit -a):
+        git-enhancer commit --ai -a
+        # or
+        git-enhancer commit --ai --all
+    
         # Generate AI commit message and GPG-sign the commit
-        git-enhancer commit --ai -S 
+        git-enhancer commit --ai -S
+    
+        # Combine auto-staging with other options:
+        git-enhancer commit --ai -aS
         ```
     *   **Standard Commit**: If `--ai` is not used for message generation within the `commit` subcommand, `git-enhancer` behaves like the standard `git commit`, passing through arguments.
         ```bash

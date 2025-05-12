@@ -34,35 +34,35 @@
 
 ## 配置
 
-`git-enhancer` 在其根目录中使用 `config.json` 文件进行 AI 相关设置，并使用 `prompts/commit-prompt` 文件作为生成提交信息时使用的系统提示。
+`git-enhancer` 在其根目录中使用 `config.toml` 文件进行 AI 相关设置，并使用 `prompts/commit-prompt` 文件作为生成提交信息时使用的系统提示。
 
-1.  **创建 `config.json`**：
-    将示例配置文件 `config.example.json` 复制到 `git-enhancer` 项目的根目录下，并重命名为 `config.json`（如果它是全局安装并且期望在那里找到配置文件，则复制到运行可执行文件的目录——这可能需要针对全局安装进行调整）。
+1.  **创建 `config.toml`**：
+    将示例配置文件 `config.example.toml` 复制到 `git-enhancer` 项目的根目录下，并重命名为 `config.toml`（如果它是全局安装并且期望在那里找到配置文件，则复制到运行可执行文件的目录——这可能需要针对全局安装进行调整）。
 
     ```bash
-    cp config.example.json config.json
+    cp config.example.toml config.toml
     ```
 
-    编辑 `config.json` 并填入您的首选设置：
-    ```json
-    {
-      "api_url": "http://localhost:11434/v1/chat/completions", // 您的 LLM API 端点
-      "model_name": "qwen3:32b-q8_0",                        // 要使用的模型
-      "temperature": 0.7,                                     // LLM temperature (温度)
-      "api_key": "YOUR_API_KEY_IF_NEEDED"                   // API 密钥，如果您的端点需要
-    }
+    编辑 `config.toml` 并填入您的首选设置：
+    ```toml
+    [ai]
+    api_url = "http://localhost:11434/v1/chat/completions"  # 您的 LLM API 端点
+    model_name = "qwen3:32b-q8_0"                           # 要使用的模型
+    temperature = 0.7                                        # LLM temperature (温度)
+    api_key = "YOUR_API_KEY_IF_NEEDED"                       # API 密钥，如果您的端点需要
     ```
-    *   `api_url`: 您的 OpenAI 兼容的聊天补全端点的 URL。
-    *   `model_name`: 您的 API 端点期望的特定模型标识符。
-    *   `temperature`: 控制 AI 的创造力。较高的值意味着更具创造性/随机性，较低的值意味着更具确定性。
-    *   `api_key`: 您的 API 密钥，如果服务需要。这是可选的。
+    *   `[ai]`: AI相关配置设置的部分
+        *   `api_url`: 您的 OpenAI 兼容的聊天补全端点的 URL。
+        *   `model_name`: 您的 API 端点期望的特定模型标识符。
+        *   `temperature`: 控制 AI 的创造力。较高的值意味着更具创造性/随机性，较低的值意味着更具确定性。
+        *   `api_key`: 您的 API 密钥，如果服务需要。这是可选的。
 
 2.  **自定义 `prompts/commit-prompt`**：
     `prompts/commit-prompt` 文件包含提供给 AI 的系统提示，以指导其生成提交信息。您可以编辑此文件以更改提交信息的风格、语气或特定要求。
 
     默认提示鼓励使用约定式提交 (conventional commit) 风格的信息。
 
-    *注意：如果找不到 `config.json`，`git-enhancer` 将使用默认值，但如果缺少 `prompts/commit-prompt`，它将失败。*
+    *注意：如果找不到 `config.toml`，`git-enhancer` 将使用默认值，但如果缺少 `prompts/commit-prompt`，它将失败。*
 
 ## 使用方法
 
@@ -70,24 +70,32 @@
 
 ### 1. AI 生成的提交信息
 
-要让 AI 根据暂存的更改生成提交信息：
+要让 AI 根据您的更改生成提交信息：
 
-1.  像往常一样暂存您的更改：
+1.  如果您已经暂存了更改：
     ```bash
     git add <file1> <file2> ...
-    ```
-2.  运行 `git-enhancer commit --ai`：
-    ```bash
     git-enhancer commit --ai
     ```
-    或者，如果您已为 `git enhancer` 或类似命令设置了别名：
+    
+2.  自动暂存所有已跟踪的修改文件并生成 AI 提交信息（类似于 `git commit -a`）：
     ```bash
-    git enhancer commit --ai
+    git-enhancer commit --ai -a
+    # 或者
+    git-enhancer commit --ai --all
     ```
-
+    
     您还可以传递其他 `git commit` 参数：
     ```bash
     git-enhancer commit --ai -S  # 用于 GPG 签名
+    
+    # 组合自动暂存与其他选项：
+    git-enhancer commit --ai -aS
+    ```
+    
+    如果您已为 `git enhancer` 或类似命令设置了别名：
+    ```bash
+    git enhancer commit --ai -a
     ```
 
 ### 2. AI 驱动的命令解释与辅助

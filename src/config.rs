@@ -37,7 +37,7 @@ pub struct AppConfig {
 impl AppConfig {
     pub fn load() -> Result<Self, ConfigError> {
         // 1. 尝试从用户目录加载配置
-        let user_config_path = Self::get_user_config_path()?;
+        let user_config_path = Self::get_user_file_path(USER_CONFIG_FILE_NAME)?;
         let project_config_path = Path::new(PROJECT_CONFIG_FILE_NAME);
         let project_example_config_path = Path::new(PROJECT_CONFIG_EXAMPLE_FILE_NAME);
         let prompt_path = Path::new(PROJECT_PROMPT_FILE_NAME);
@@ -150,9 +150,8 @@ impl AppConfig {
         ))
     }
     
-    // 获取用户配置文件的路径
-    // Override the get_user_config_path function to use a test directory
-    fn get_user_config_path() -> Result<std::path::PathBuf, ConfigError> {
+    // 获取用户目录中指定文件的路径
+    fn get_user_file_path(filename: &str) -> Result<std::path::PathBuf, ConfigError> {
         // Use the environment variable HOME set during test setup
         let home_str = std::env::var("HOME").unwrap_or_else(|_| {
             // Fallback to real home directory if env var not set
@@ -163,23 +162,12 @@ impl AppConfig {
         });
         
         let home = PathBuf::from(home_str);
-        Ok(home.join(USER_CONFIG_DIR).join(USER_CONFIG_FILE_NAME))
+        Ok(home.join(USER_CONFIG_DIR).join(filename))
     }
     
-    // 获取用户提示文件的路径
-    fn get_user_prompt_path() -> Result<std::path::PathBuf, ConfigError> {
-        // Use the environment variable HOME set during test setup
-        let home_str = std::env::var("HOME").unwrap_or_else(|_| {
-            // Fallback to real home directory if env var not set
-            home_dir()
-                .expect("Could not determine home directory")
-                .to_string_lossy()
-                .to_string()
-        });
-        
-        let home = PathBuf::from(home_str);
-        Ok(home.join(USER_CONFIG_DIR).join(USER_PROMPT_FILE_NAME))
-    }
+    // 以下函数被移除，直接使用 get_user_file_path 函数代替
+    // - get_user_config_path
+    // - get_user_prompt_path
     
     // 从指定文件加载配置
     fn load_config_from_file(config_path: &Path, prompt_path: &Path) -> Result<Self, ConfigError> {
@@ -207,7 +195,7 @@ impl AppConfig {
         }
         
         // 获取用户提示文件路径
-        let user_prompt_path = Self::get_user_prompt_path()?;
+        let user_prompt_path = Self::get_user_file_path(USER_PROMPT_FILE_NAME)?;
         
         // 尝试加载系统提示文件，优先使用用户目录中的提示文件
         let system_prompt = if user_prompt_path.exists() {

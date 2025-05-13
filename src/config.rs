@@ -12,7 +12,8 @@ const PROJECT_CONFIG_FILE_NAME: &str = "config.toml";
 const PROJECT_CONFIG_EXAMPLE_FILE_NAME: &str = "config.example.toml";
 const USER_CONFIG_DIR: &str = ".config/gitie";
 const USER_CONFIG_FILE_NAME: &str = "config.toml";
-const PROMPT_FILE_NAME: &str = "prompts/commit-prompt";
+const PROJECT_PROMPT_FILE_NAME: &str = "prompts/commit-prompt";
+const USER_PROMPT_FILE_NAME: &str = "commit-prompt";
 
 // AI服务的配置
 #[derive(Deserialize, Debug, Clone, Default)]
@@ -39,7 +40,7 @@ impl AppConfig {
         let user_config_path = Self::get_user_config_path()?;
         let project_config_path = Path::new(PROJECT_CONFIG_FILE_NAME);
         let project_example_config_path = Path::new(PROJECT_CONFIG_EXAMPLE_FILE_NAME);
-        let prompt_path = Path::new(PROMPT_FILE_NAME);
+        let prompt_path = Path::new(PROJECT_PROMPT_FILE_NAME);
         
         // FOR TESTING: if we're in a test directory, adjust paths for better error messages
         let _in_test = std::env::current_dir()
@@ -165,6 +166,21 @@ impl AppConfig {
         Ok(home.join(USER_CONFIG_DIR).join(USER_CONFIG_FILE_NAME))
     }
     
+    // 获取用户提示文件的路径
+    fn get_user_prompt_path() -> Result<std::path::PathBuf, ConfigError> {
+        // Use the environment variable HOME set during test setup
+        let home_str = std::env::var("HOME").unwrap_or_else(|_| {
+            // Fallback to real home directory if env var not set
+            home_dir()
+                .expect("Could not determine home directory")
+                .to_string_lossy()
+                .to_string()
+        });
+        
+        let home = PathBuf::from(home_str);
+        Ok(home.join(USER_CONFIG_DIR).join(USER_PROMPT_FILE_NAME))
+    }
+    
     // 从指定文件加载配置
     fn load_config_from_file(config_path: &Path, prompt_path: &Path) -> Result<Self, ConfigError> {
         // 读取配置文件
@@ -190,14 +206,44 @@ impl AppConfig {
             partial_config.ai = Some(PartialAIConfig::default());
         }
         
-        // 加载系统提示文件
-        let system_prompt = if prompt_path.exists() {
-            info!("Loading system prompt from {}", PROMPT_FILE_NAME);
-            fs::read_to_string(prompt_path)
-                .map_err(|e| ConfigError::FileRead(PROMPT_FILE_NAME.to_string(), e))?
+        // 获取用户提示文件路径
+        let user_prompt_path = Self::get_user_prompt_path()?;
+        
+        // 尝试加载系统提示文件，优先使用用户目录中的提示文件
+        let system_prompt = if user_prompt_path.exists() {
+            info!("Loading system prompt from user directory: {:?}", user_prompt_path);
+            fs::read_to_string(&user_prompt_path)
+                .map_err(|e| ConfigError::FileRead(user_prompt_path.to_string_lossy().to_string(), e))?
+        } else if prompt_path.exists() {
+            // 如果用户目录中没有提示文件，使用项目目录中的提示文件
+            info!("Loading system prompt from project: {}", PROJECT_PROMPT_FILE_NAME);
+            
+            // 读取项目提示文件
+            let prompt_content = fs::read_to_string(prompt_path)
+                .map_err(|e| ConfigError::FileRead(PROJECT_PROMPT_FILE_NAME.to_string(), e))?;
+            
+            // 复制到用户目录
+            info!("Copying prompt to user directory: {:?}", user_prompt_path);
+            if let Some(parent) = user_prompt_path.parent() {
+                create_dir_all(parent).map_err(|e| {
+                    ConfigError::FileWrite(
+                        parent.to_string_lossy().to_string(),
+                        e
+                    )
+                })?;
+            }
+            
+            fs::write(&user_prompt_path, &prompt_content).map_err(|e| {
+                ConfigError::FileWrite(
+                    user_prompt_path.to_string_lossy().to_string(), 
+                    e
+                )
+            })?;
+            
+            prompt_content
         } else {
-            error!("System prompt file {} not found! AI generation might not work as expected.", PROMPT_FILE_NAME);
-            return Err(ConfigError::PromptFileMissing(PROMPT_FILE_NAME.to_string()));
+            error!("System prompt file not found! AI generation might not work as expected.");
+            return Err(ConfigError::PromptFileMissing(PROJECT_PROMPT_FILE_NAME.to_string()));
         };
         
         // 验证并处理AI配置
@@ -311,8 +357,8 @@ api_key = "YOUR_API_KEY_IF_NEEDED"
         }
 
         if let Some(content) = prompt_content {
-            // PROMPT_FILE_NAME includes "prompts/" prefix
-            let prompt_path = base_path.join(PROMPT_FILE_NAME);
+            // PROJECT_PROMPT_FILE_NAME includes "prompts/" prefix
+            let prompt_path = base_path.join(PROJECT_PROMPT_FILE_NAME);
             // Ensure the prompts directory exists before creating the prompt file
             fs::create_dir_all(prompt_path.parent().expect("Failed to get prompt file parent directory")).expect("Failed to create prompts directory during setup");
             let mut file = File::create(prompt_path).expect("Failed to create prompt file during setup");
@@ -364,7 +410,9 @@ api_key = "test_key_123"
 
         // Verify the config was copied to user directory
         let mock_user_config = base_path.join("mock_home").join(USER_CONFIG_DIR).join(USER_CONFIG_FILE_NAME);
+        let mock_user_prompt = base_path.join("mock_home").join(USER_CONFIG_DIR).join(USER_PROMPT_FILE_NAME);
         assert!(mock_user_config.exists(), "Config should be copied to user directory");
+        assert!(mock_user_prompt.exists(), "Prompt should be copied to user directory");
 
         let _ = std::env::set_current_dir(original_dir);
         cleanup_test_environment(base_path);
@@ -397,6 +445,12 @@ model_name = "partial-model"
         assert_eq!(config.ai.api_key, None); // Should be None (not specified)
         assert_eq!(config.system_prompt, prompt_text);
 
+        // Verify files were copied to user directory
+        let mock_user_config = base_path.join("mock_home").join(USER_CONFIG_DIR).join(USER_CONFIG_FILE_NAME);
+        let mock_user_prompt = base_path.join("mock_home").join(USER_CONFIG_DIR).join(USER_PROMPT_FILE_NAME);
+        assert!(mock_user_config.exists(), "Config should be copied to user directory");
+        assert!(mock_user_prompt.exists(), "Prompt should be copied to user directory");
+
         let _ = std::env::set_current_dir(original_dir);
         cleanup_test_environment(base_path);
     }
@@ -427,6 +481,12 @@ model_name = "qwen3:32b-q8_0"
         assert_eq!(config.ai.api_key, None); // Should be None (not specified)
         assert_eq!(config.system_prompt, prompt_text);
 
+        // Verify files were copied to user directory
+        let mock_user_config = base_path.join("mock_home").join(USER_CONFIG_DIR).join(USER_CONFIG_FILE_NAME);
+        let mock_user_prompt = base_path.join("mock_home").join(USER_CONFIG_DIR).join(USER_PROMPT_FILE_NAME);
+        assert!(mock_user_config.exists(), "Config should be copied to user directory");
+        assert!(mock_user_prompt.exists(), "Prompt should be copied to user directory");
+
         let _ = std::env::set_current_dir(original_dir);
         cleanup_test_environment(base_path);
     }
@@ -456,7 +516,9 @@ model_name = "qwen3:32b-q8_0"
 
         // Verify the example config was copied to user directory
         let mock_user_config = base_path.join("mock_home").join(USER_CONFIG_DIR).join(USER_CONFIG_FILE_NAME);
+        let mock_user_prompt = base_path.join("mock_home").join(USER_CONFIG_DIR).join(USER_PROMPT_FILE_NAME);
         assert!(mock_user_config.exists(), "Example config should be copied to user directory");
+        assert!(mock_user_prompt.exists(), "Prompt should be copied to user directory");
 
         let _ = std::env::set_current_dir(original_dir);
         cleanup_test_environment(base_path);
@@ -501,7 +563,7 @@ model_name = "qwen3:32b-q8_0"
         assert!(config_result.is_err());
         match config_result.err().unwrap() {
             ConfigError::PromptFileMissing(path) => {
-                assert!(path.contains(PROMPT_FILE_NAME));
+                assert!(path.contains(PROJECT_PROMPT_FILE_NAME));
             }
             e => panic!("Expected PromptFileMissing, got {:?}", e),
         }
@@ -509,6 +571,7 @@ model_name = "qwen3:32b-q8_0"
         // Config should still be copied to user directory even though prompt is missing
         let mock_user_config = base_path.join("mock_home").join(USER_CONFIG_DIR).join(USER_CONFIG_FILE_NAME);
         assert!(mock_user_config.exists(), "Config should be copied to user directory despite prompt error");
+        // No need to check prompt file as it's missing by design in this test
 
         let _ = std::env::set_current_dir(original_dir);
         cleanup_test_environment(base_path);
@@ -528,7 +591,7 @@ model_name = "qwen3:32b-q8_0"
         assert!(config_result.is_err());
         match config_result.err().unwrap() {
             ConfigError::PromptFileMissing(path) => {
-                 assert!(path.contains(PROMPT_FILE_NAME));
+                 assert!(path.contains(PROJECT_PROMPT_FILE_NAME));
             }
             e => panic!("Expected PromptFileMissing, got {:?}", e),
         }
@@ -536,6 +599,7 @@ model_name = "qwen3:32b-q8_0"
         // Config should still be copied to user directory even though prompt is missing
         let mock_user_config = base_path.join("mock_home").join(USER_CONFIG_DIR).join(USER_CONFIG_FILE_NAME);
         assert!(mock_user_config.exists(), "Config should be copied to user directory despite prompt directory error");
+        // No need to check prompt file as it's missing by design in this test
 
         let _ = std::env::set_current_dir(original_dir);
         cleanup_test_environment(base_path);
@@ -568,7 +632,9 @@ temperature = "not_a_float"  # Invalid type
 
         // The invalid config should not be copied to user directory
         let mock_user_config = base_path.join("mock_home").join(USER_CONFIG_DIR).join(USER_CONFIG_FILE_NAME);
+        let mock_user_prompt = base_path.join("mock_home").join(USER_CONFIG_DIR).join(USER_PROMPT_FILE_NAME);
         assert!(!mock_user_config.exists(), "Invalid config should not be copied to user directory");
+        assert!(!mock_user_prompt.exists(), "Prompt should not be copied when config is invalid");
 
         let _ = std::env::set_current_dir(original_dir);
         cleanup_test_environment(base_path);
@@ -607,7 +673,9 @@ temperature = "not_a_float"
 
         // The invalid example config should not be copied to user directory
         let mock_user_config = base_path.join("mock_home").join(USER_CONFIG_DIR).join(USER_CONFIG_FILE_NAME);
+        let mock_user_prompt = base_path.join("mock_home").join(USER_CONFIG_DIR).join(USER_PROMPT_FILE_NAME);
         assert!(!mock_user_config.exists(), "Invalid example config should not be copied to user directory");
+        assert!(!mock_user_prompt.exists(), "Prompt should not be copied when example config is invalid");
 
         let _ = std::env::set_current_dir(original_dir);
         cleanup_test_environment(base_path);
@@ -638,7 +706,9 @@ api_key = ""
         
         // Verify the config was copied to user directory
         let mock_user_config = base_path.join("mock_home").join(USER_CONFIG_DIR).join(USER_CONFIG_FILE_NAME);
+        let mock_user_prompt = base_path.join("mock_home").join(USER_CONFIG_DIR).join(USER_PROMPT_FILE_NAME);
         assert!(mock_user_config.exists(), "Config should be copied to user directory");
+        assert!(mock_user_prompt.exists(), "Prompt should be copied to user directory");
 
         let _ = std::env::set_current_dir(original_dir);
         cleanup_test_environment(base_path);
@@ -662,7 +732,9 @@ api_key = ""
         
         // Verify the example config was copied to user directory
         let mock_user_config = base_path.join("mock_home").join(USER_CONFIG_DIR).join(USER_CONFIG_FILE_NAME);
+        let mock_user_prompt = base_path.join("mock_home").join(USER_CONFIG_DIR).join(USER_PROMPT_FILE_NAME);
         assert!(mock_user_config.exists(), "Example config should be copied to user directory");
+        assert!(mock_user_prompt.exists(), "Prompt should be copied to user directory");
 
         let _ = std::env::set_current_dir(original_dir);
         cleanup_test_environment(base_path);

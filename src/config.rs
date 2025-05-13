@@ -2,7 +2,7 @@ use serde::Deserialize;
 use std::{fs, io};
 use std::path::Path;
 use std::io::ErrorKind;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 use dirs::home_dir;
 use std::fs::create_dir_all;
 
@@ -241,7 +241,7 @@ mod tests {
 
         // Add this block to create config.example.toml
         if create_example_config {
-            let example_config_path = base_path.join(CONFIG_EXAMPLE_FILE_NAME);
+            let example_config_path = base_path.join(PROJECT_CONFIG_EXAMPLE_FILE_NAME);
             // Hardcode the example config content here for tests
             let example_content = r#"[ai]
 api_url = "http://localhost:11434/v1/chat/completions"
@@ -255,7 +255,7 @@ api_key = "YOUR_API_KEY_IF_NEEDED"
 
 
         if let Some(content) = config_content {
-            let mut file = File::create(base_path.join(CONFIG_FILE_NAME)).expect("Failed to create config.toml during setup");
+            let mut file = File::create(base_path.join(PROJECT_CONFIG_FILE_NAME)).expect("Failed to create config.toml during setup");
             file.write_all(content.as_bytes()).expect("Failed to write to config.toml during setup");
         }
 
@@ -402,7 +402,7 @@ model_name = "partial-model"
         match config_result.err().unwrap() {
             // It should fail because config.example.toml is missing
             ConfigError::FileRead(path, _) => {
-                 assert_eq!(path, CONFIG_EXAMPLE_FILE_NAME);
+                 assert_eq!(path, PROJECT_CONFIG_EXAMPLE_FILE_NAME);
             }
             e => panic!("Expected FileRead error for example config, got {:?}", e),
         }
@@ -481,7 +481,7 @@ temperature = "not_a_float"  # Invalid type
         assert!(config_result.is_err());
         match config_result.err().unwrap() {
             ConfigError::TomlParse(path, _) => {
-                assert_eq!(path, CONFIG_FILE_NAME);
+                assert_eq!(path, PROJECT_CONFIG_FILE_NAME);
             }
             e => panic!("Expected TomlParse error, got {:?}", e),
         }
@@ -503,7 +503,7 @@ temperature = "not_a_float"
         let prompt_text = "Prompt text";
         // Needs invalid example config, no config.toml
         let base_path = setup_test_environment(test_name, None, Some(prompt_text), true, false);
-        let example_config_path = base_path.join(CONFIG_EXAMPLE_FILE_NAME);
+        let example_config_path = base_path.join(PROJECT_CONFIG_EXAMPLE_FILE_NAME);
         let mut file = File::create(example_config_path).unwrap();
         file.write_all(invalid_example_config_toml.as_bytes()).unwrap();
 
@@ -515,7 +515,7 @@ temperature = "not_a_float"
         assert!(config_result.is_err());
         match config_result.err().unwrap() {
             ConfigError::TomlParse(path, _) => {
-                assert_eq!(path, CONFIG_EXAMPLE_FILE_NAME);
+                assert_eq!(path, PROJECT_CONFIG_EXAMPLE_FILE_NAME);
             }
             e => panic!("Expected TomlParse error for example config, got {:?}", e),
         }

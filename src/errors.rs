@@ -39,6 +39,7 @@ impl std::error::Error for AppError {
 #[derive(Debug)]
 pub enum ConfigError {
     FileRead(String, io::Error),
+    FileWrite(String, io::Error),
     JsonParse(String, serde_json::Error),
     TomlParse(String, toml::de::Error),
     PromptFileMissing(String),
@@ -50,6 +51,7 @@ impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ConfigError::FileRead(file, e) => write!(f, "Failed to read file '{}': {}", file, e),
+            ConfigError::FileWrite(path, e) => write!(f, "Failed to write to path '{}': {}", path, e),
             ConfigError::JsonParse(file, e) => write!(f, "Failed to parse JSON from file '{}': {}", file, e),
             ConfigError::TomlParse(file, e) => write!(f, "Failed to parse TOML from file '{}': {}", file, e),
             ConfigError::PromptFileMissing(file) => write!(f, "Critical prompt file '{}' is missing.", file),
@@ -63,6 +65,7 @@ impl std::error::Error for ConfigError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             ConfigError::FileRead(_, e) => Some(e),
+            ConfigError::FileWrite(_, e) => Some(e),
             ConfigError::JsonParse(_, e) => Some(e),
             ConfigError::TomlParse(_, e) => Some(e),
             ConfigError::PromptFileMissing(_) => None,

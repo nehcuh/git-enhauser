@@ -1,12 +1,17 @@
 use serde::Deserialize;
 use std::{fs, io};
 use std::path::Path;
+use std::io::ErrorKind;
 use tracing::{error, info, warn};
+use dirs::home_dir;
+use std::fs::create_dir_all;
 
 use crate::errors::ConfigError;
 
-const CONFIG_FILE_NAME: &str = "config.toml";
-const CONFIG_EXAMPLE_FILE_NAME: &str = "config.example.toml";
+const PROJECT_CONFIG_FILE_NAME: &str = "config.toml";
+const PROJECT_CONFIG_EXAMPLE_FILE_NAME: &str = "config.example.toml";
+const USER_CONFIG_DIR: &str = ".config/gitie";
+const USER_CONFIG_FILE_NAME: &str = "config.toml";
 const PROMPT_FILE_NAME: &str = "prompts/commit-prompt";
 
 // AI服务的配置
@@ -30,59 +35,119 @@ pub struct AppConfig {
 
 impl AppConfig {
     pub fn load() -> Result<Self, ConfigError> {
-        let config_path = Path::new(CONFIG_FILE_NAME);
-        let config_example_path = Path::new(CONFIG_EXAMPLE_FILE_NAME);
+        // 1. 尝试从用户目录加载配置
+        let user_config_path = Self::get_user_config_path()?;
+        let project_config_path = Path::new(PROJECT_CONFIG_FILE_NAME);
+        let project_example_config_path = Path::new(PROJECT_CONFIG_EXAMPLE_FILE_NAME);
         let prompt_path = Path::new(PROMPT_FILE_NAME);
-
-        // Load defaults from config.example.toml first
-        let mut merged_config: PartialAppConfig = if config_example_path.exists() {
-            info!("Loading default configuration from {}", CONFIG_EXAMPLE_FILE_NAME);
-            let config_content = fs::read_to_string(config_example_path)
-                .map_err(|e| ConfigError::FileRead(CONFIG_EXAMPLE_FILE_NAME.to_string(), e))?;
-            toml::from_str(&config_content)
-                .map_err(|e| ConfigError::TomlParse(CONFIG_EXAMPLE_FILE_NAME.to_string(), e))?
-        } else {
-             error!(
-                "Default configuration file {} not found. Cannot load configuration.",
-                CONFIG_EXAMPLE_FILE_NAME
-            );
-            // If the example file is missing, we can't even get defaults. This is an error.
-            return Err(ConfigError::FileRead(CONFIG_EXAMPLE_FILE_NAME.to_string(), io::Error::new(io::ErrorKind::NotFound, "config.example.toml not found")));
-        };
-
-
-        // If config.toml exists, load it and merge (user settings override defaults)
-        if config_path.exists() {
-            info!("Loading user configuration from {}", CONFIG_FILE_NAME);
-            let user_config_content = fs::read_to_string(config_path)
-                .map_err(|e| ConfigError::FileRead(CONFIG_FILE_NAME.to_string(), e))?;
-            let user_partial_config: PartialAppConfig = toml::from_str(&user_config_content)
-                .map_err(|e| ConfigError::TomlParse(CONFIG_FILE_NAME.to_string(), e))?;
-
-            // Merge user config into default config
-            merged_config.merge_with(user_partial_config);
-        } else {
-            warn!(
-                "Configuration file {} not found. Using default values from {}. Please create one based on {} for custom settings.",
-                CONFIG_FILE_NAME, CONFIG_EXAMPLE_FILE_NAME, CONFIG_EXAMPLE_FILE_NAME
-            );
+        
+        // 首先检查用户目录配置是否存在
+        if user_config_path.exists() {
+            // 用户配置存在，直接从用户目录加载
+            info!("Loading configuration from user directory: {:?}", user_config_path);
+            return Self::load_config_from_file(&user_config_path, prompt_path);
         }
-
-        // Handle the placeholder api_key from example config or empty string
-        if let Some(ai) = &mut merged_config.ai {
+        
+        // 用户目录配置不存在，检查项目配置
+        if project_config_path.exists() {
+            info!("Found project configuration: {}", PROJECT_CONFIG_FILE_NAME);
+            info!("Copying to user directory: {:?}", user_config_path);
+            
+            // 确保用户配置目录存在
+            if let Some(parent) = user_config_path.parent() {
+                create_dir_all(parent).map_err(|e| {
+                    ConfigError::FileWrite(
+                        parent.to_string_lossy().to_string(),
+                        e
+                    )
+                })?;
+            }
+            
+            // 复制项目配置到用户目录
+            fs::copy(project_config_path, &user_config_path).map_err(|e| {
+                ConfigError::FileWrite(
+                    user_config_path.to_string_lossy().to_string(),
+                    e
+                )
+            })?;
+            
+            // 从复制后的用户配置加载
+            return Self::load_config_from_file(&user_config_path, prompt_path);
+        }
+        
+        // 项目配置也不存在，检查示例配置
+        if project_example_config_path.exists() {
+            info!("No configuration found. Creating default configuration from example.");
+            info!("Copying {} to {:?}", PROJECT_CONFIG_EXAMPLE_FILE_NAME, user_config_path);
+            
+            // 确保用户配置目录存在
+            if let Some(parent) = user_config_path.parent() {
+                create_dir_all(parent).map_err(|e| {
+                    ConfigError::FileWrite(
+                        parent.to_string_lossy().to_string(),
+                        e
+                    )
+                })?;
+            }
+            
+            // 复制示例配置到用户目录
+            fs::copy(project_example_config_path, &user_config_path).map_err(|e| {
+                ConfigError::FileWrite(
+                    user_config_path.to_string_lossy().to_string(), 
+                    e
+                )
+            })?;
+            
+            // 从复制后的用户配置加载
+            return Self::load_config_from_file(&user_config_path, prompt_path);
+        }
+        
+        // 所有配置文件都不存在，无法继续
+        error!("No configuration files found. Cannot continue.");
+        Err(ConfigError::FileRead(
+            PROJECT_CONFIG_EXAMPLE_FILE_NAME.to_string(),
+            io::Error::new(ErrorKind::NotFound, "No configuration files found")
+        ))
+    }
+    
+    // 获取用户配置文件的路径
+    fn get_user_config_path() -> Result<std::path::PathBuf, ConfigError> {
+        let home = home_dir().ok_or_else(|| {
+            ConfigError::FileRead(
+                "~".to_string(),
+                io::Error::new(ErrorKind::NotFound, "Home directory not found")
+            )
+        })?;
+        
+        Ok(home.join(USER_CONFIG_DIR).join(USER_CONFIG_FILE_NAME))
+    }
+    
+    // 从指定文件加载配置
+    fn load_config_from_file(config_path: &Path, prompt_path: &Path) -> Result<Self, ConfigError> {
+        // 读取配置文件
+        let config_content = fs::read_to_string(config_path)
+            .map_err(|e| ConfigError::FileRead(config_path.to_string_lossy().to_string(), e))?;
+        
+        // 解析TOML
+        let mut partial_config: PartialAppConfig = toml::from_str(&config_content)
+            .map_err(|e| ConfigError::TomlParse(config_path.to_string_lossy().to_string(), e))?;
+        
+        // 处理API密钥占位符
+        if let Some(ai) = &mut partial_config.ai {
             if let Some(api_key) = &ai.api_key {
                 if api_key == "YOUR_API_KEY_IF_NEEDED" || api_key.is_empty() {
                     ai.api_key = None;
-                    info!("Using default configuration, API key placeholder or empty string found. Treating as no API key.");
+                    info!("API key placeholder or empty string found. Treating as no API key.");
                 }
             }
         }
-
-        // Ensure ai section exists even if empty config
-        if merged_config.ai.is_none() {
-            merged_config.ai = Some(PartialAIConfig::default());
+        
+        // 确保ai部分存在
+        if partial_config.ai.is_none() {
+            partial_config.ai = Some(PartialAIConfig::default());
         }
-
+        
+        // 加载系统提示文件
         let system_prompt = if prompt_path.exists() {
             info!("Loading system prompt from {}", PROMPT_FILE_NAME);
             fs::read_to_string(prompt_path)
@@ -91,31 +156,31 @@ impl AppConfig {
             error!("System prompt file {} not found! AI generation might not work as expected.", PROMPT_FILE_NAME);
             return Err(ConfigError::PromptFileMissing(PROMPT_FILE_NAME.to_string()));
         };
-
-        // Validate the AI configuration
-        let partial_ai_config = merged_config.ai.unwrap_or_default();
         
-        // Validate required fields in the AI config and get default values if needed
+        // 验证并处理AI配置
+        let partial_ai_config = partial_config.ai.unwrap_or_default();
+        
+        // 获取必填字段值或使用默认值
         let api_url = partial_ai_config.api_url.unwrap_or_default();
         let model_name = partial_ai_config.model_name.unwrap_or_default();
-        let temperature = partial_ai_config.temperature.unwrap_or(0.7); // Default temperature if not specified
+        let temperature = partial_ai_config.temperature.unwrap_or(0.7);
         
-        // Check if required fields are missing
+        // 检查必填字段
         if api_url.is_empty() {
             return Err(ConfigError::FieldMissing("ai.api_url".to_string()));
         }
         if model_name.is_empty() {
             return Err(ConfigError::FieldMissing("ai.model_name".to_string()));
         }
-
-        // Convert from PartialAIConfig to AIConfig
+        
+        // 构建最终配置
         let ai_config = AIConfig {
             api_url,
             model_name,
             temperature,
             api_key: partial_ai_config.api_key,
         };
-
+        
         Ok(AppConfig {
             ai: ai_config,
             system_prompt,
@@ -140,33 +205,6 @@ struct PartialAIConfig {
 #[derive(Deserialize, Debug, Default)]
 struct PartialAppConfig {
     ai: Option<PartialAIConfig>,
-}
-
-impl PartialAppConfig {
-    // 合并用户配置与默认配置
-    fn merge_with(&mut self, other: PartialAppConfig) {
-        if let Some(other_ai) = other.ai {
-            if let Some(my_ai) = &mut self.ai {
-                // 如果用户配置中有AI配置，则覆盖默认配置
-                if let Some(url) = other_ai.api_url {
-                    my_ai.api_url = Some(url);
-                }
-                if let Some(model) = other_ai.model_name {
-                    my_ai.model_name = Some(model);
-                }
-                if let Some(temp) = other_ai.temperature {
-                    my_ai.temperature = Some(temp);
-                }
-                // 用户提供的API密钥会覆盖默认的，即使是空字符串
-                if other_ai.api_key.is_some() {
-                    my_ai.api_key = other_ai.api_key;
-                }
-            } else {
-                // 如果默认配置中没有AI配置但用户配置中有，则直接使用用户配置
-                self.ai = Some(other_ai);
-            }
-        }
-    }
 }
 
 #[cfg(test)]

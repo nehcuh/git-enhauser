@@ -13,3 +13,4 @@ tokio = { version = "1.45.0", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
 regex = "1"
+dirs = "5.0.1"

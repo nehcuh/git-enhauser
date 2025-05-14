@@ -7,18 +7,19 @@ mod ai_utils;
 mod cli;
 mod config;
 mod errors;
+mod types;
 
+// CLI and core types
 use crate::cli::{args_contain_help, CommitArgs, EnhancerSubCommand, GitEnhancerArgs};
-use ai_explainer::{explain_git_command, explain_git_command_output};
-use ai_utils::{OpenAIChatCompletionResponse, OpenAIChatRequest, ChatMessage}; 
+use crate::types::{CommandOutput, GitCommit, GitStatus, GitOperation};
 use config::AppConfig;
 use errors::{AppError, GitError, AIError}; 
 
-struct CommandOutput {
-    stdout: String,
-    stderr: String,
-    status: ExitStatus,
-}
+// External dependencies
+use ai_explainer::{explain_git_command, explain_git_command_output};
+use ai_utils::{OpenAIChatCompletionResponse, OpenAIChatRequest, ChatMessage}; 
+
+
 
 fn main() {
     tracing_subscriber::fmt()

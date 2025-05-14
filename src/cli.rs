@@ -40,6 +40,7 @@ pub struct CommitArgs {
 }
 
 /// Checks if a slice of string arguments contains "-h" or "--help".
+#[inline]
 pub fn args_contain_help(args: &[String]) -> bool {
     args.iter().any(|arg| arg == "-h" || arg == "--help")
 }

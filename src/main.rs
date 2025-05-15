@@ -12,6 +12,11 @@ mod types;
 
 // CLI and core types
 use crate::cli::{args_contain_help, CommitArgs, EnhancerSubCommand, GitEnhancerArgs};
+
+/// Checks if the `--ai` flag is present in the provided arguments
+fn args_contain_ai(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--ai")
+}
 use crate::git_commands::{execute_git_command_and_capture_output, passthrough_to_git, map_output_to_git_command_error, is_git_available, is_in_git_repository};
 use crate::commit_commands::{handle_commit, handle_commit_passthrough};
 use config::AppConfig;
@@ -65,7 +70,7 @@ async fn run_app() -> Result<(), AppError> {
     let raw_cli_args: Vec<String> = std::env::args().skip(1).collect();
     // 1. Check for help flags first
     if args_contain_help(&raw_cli_args) {
-        let ai_flag_present = raw_cli_args.iter().any(|arg| arg == "--ai");
+        let ai_flag_present = args_contain_ai(&raw_cli_args);
         if ai_flag_present {
             tracing::info!("Help flag detected with --ai. Explaining Git command output...");
             let mut command_to_execute_for_help = raw_cli_args.clone();
@@ -114,7 +119,7 @@ async fn run_app() -> Result<(), AppError> {
                 // Failed to parse as a specific git-enhancer subcommand.
                 // This could be a global --ai explanation request for a generic git command (e.g. `git-enhauser --ai status`),
                 // or just a command to passthrough (e.g. `git-enhauser status`).
-                let ai_flag_present = raw_cli_args.iter().any(|arg| arg == "--ai");
+                let ai_flag_present = args_contain_ai(&raw_cli_args);
                 if ai_flag_present {
                     tracing::info!("Not a specific git-enhancer subcommand, but --ai flag detected. Explaining Git command...");
                     let mut command_to_explain = raw_cli_args.clone();

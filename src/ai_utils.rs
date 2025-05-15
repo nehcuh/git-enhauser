@@ -1,37 +1,43 @@
 use serde::{Deserialize, Serialize};
 
+/// Represents a chat message with a role and content
+/// 
+/// This structure is used for both requests to and responses from AI chat models
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
 }
 
-// 定义发送到Ollama /v1/chat/completions端点的请求体结构体
+/// Defines the request body structure for sending to the Ollama /v1/chat/completions endpoint
 #[derive(Serialize, Debug, Clone)]
 pub struct OpenAIChatRequest {
     pub model: String,
     pub messages: Vec<ChatMessage>,
-    pub temperature: Option<f32>, // OpenAI API通常将temperature作为可选的顶层参数
+    pub temperature: Option<f32>, // Temperature is typically an optional top-level parameter in the OpenAI API
     pub stream: bool,
-    // 你可以在这里添加其他OpenAI支持的选项，例如 top_p, max_tokens 等
+    // You can add other OpenAI-supported options here, such as top_p, max_tokens, etc.
     // pub max_tokens: Option<u32>,
     // pub top_p: Option<f32>,
 }
 
+/// Represents a message in the OpenAI API response format
 #[derive(Deserialize, Debug, Clone)]
 pub struct OpenAIMessage {
     pub role: String,
     pub content: String,
 }
 
+/// Represents a choice in the OpenAI API response
 #[derive(Deserialize, Debug, Clone)]
 pub struct OpenAIChoice {
     pub index: u32,
     pub message: OpenAIMessage,
     pub finish_reason: String,
-    // pub logprobs: Option<serde_json::Value>, // 如果需要解析logprobs
+    // pub logprobs: Option<serde_json::Value>, // If logprobs parsing is needed
 }
 
+/// Represents token usage information in the OpenAI API response
 #[derive(Deserialize, Debug, Clone)]
 pub struct OpenAIUsage {
     pub prompt_tokens: u32,
@@ -39,13 +45,14 @@ pub struct OpenAIUsage {
     pub total_tokens: u32,
 }
 
+/// Represents the complete response structure from the OpenAI chat completion API
 #[derive(Deserialize, Debug, Clone)]
 pub struct OpenAIChatCompletionResponse {
     pub id: String,
     pub object: String,
-    pub created: i64, // 通常是Unix时间戳
+    pub created: i64, // Typically a Unix timestamp
     pub model: String,
-    pub system_fingerprint: Option<String>, // 根据您的示例，这个字段存在
+    pub system_fingerprint: Option<String>, // This field exists based on the example provided
     pub choices: Vec<OpenAIChoice>,
     pub usage: OpenAIUsage,
 }

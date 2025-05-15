@@ -4,20 +4,6 @@ use crate::ai_utils::{
 };
 use crate::config::AppConfig;
 use crate::errors::AIError;
-use std::fs;
-
-// Function to load the system prompt from the specified file.
-// Note: This uses a relative path, which assumes the executable is run from the project root.
-// For more robust path handling, consider using `env!("CARGO_MANIFEST_DIR")`
-// or including the prompt at compile time if dynamic loading isn't strictly necessary for all scenarios.
-fn load_system_prompt() -> Result<String, AIError> {
-    fs::read_to_string("prompts/explanation-prompt").map_err(|e| {
-        AIError::ExplainerConfigurationError(format!(
-            "Failed to load system prompt from 'prompts/explanation-prompt': {}",
-            e
-        ))
-    })
-}
 
 /// Helper function to execute the AI request and process the response.
 async fn execute_ai_request(
@@ -126,12 +112,15 @@ pub async fn explain_git_command_output(
         command_output.chars().take(200).collect::<String>()
     );
 
-    let system_prompt_content = load_system_prompt()?;
+    let system_prompt_content = config.prompts.get("explanation").cloned().unwrap_or_else(|| {
+        tracing::warn!("Explanation prompt not found in config, using empty string");
+        "".to_string()
+    });
 
     let messages = vec![
         ChatMessage {
             role: "system".to_string(),
-            content: system_prompt_content.clone(), // Use cloned content for this request
+            content: system_prompt_content, // Use the prompt from config
         },
         ChatMessage {
             role: "user".to_string(),
@@ -170,12 +159,15 @@ pub async fn explain_git_command(
 
     let user_message_content = command_to_explain;
 
-    let system_prompt_content = load_system_prompt()?;
+    let system_prompt_content = config.prompts.get("explanation").cloned().unwrap_or_else(|| {
+        tracing::warn!("Explanation prompt not found in config, using empty string");
+        "".to_string()
+    });
 
     let messages = vec![
         ChatMessage {
             role: "system".to_string(),
-            content: system_prompt_content, // Use content for this request
+            content: system_prompt_content, // Use the prompt from config
         },
         ChatMessage {
             role: "user".to_string(),

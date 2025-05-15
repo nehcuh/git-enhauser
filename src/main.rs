@@ -1,19 +1,20 @@
 use clap::Parser;
 use std::env;
-use std::process::{Command as StdCommand, ExitStatus, Output as ProcessOutput};
+use std::process::Command as StdCommand;
 
 mod ai_explainer;
 mod ai_utils;
 mod cli;
 mod config;
 mod errors;
+mod git_commands;
 mod types;
 
 // CLI and core types
 use crate::cli::{args_contain_help, CommitArgs, EnhancerSubCommand, GitEnhancerArgs};
-use crate::types::{CommandOutput, GitCommit, GitStatus, GitOperation};
+use crate::git_commands::{execute_git_command_and_capture_output, passthrough_to_git, map_output_to_git_command_error};
 use config::AppConfig;
-use errors::{AppError, GitError, AIError}; 
+use errors::{AppError, GitError, AIError};
 
 // External dependencies
 use ai_explainer::{explain_git_command, explain_git_command_output};
@@ -132,47 +133,10 @@ async fn run_app() -> Result<(), AppError> {
     Ok(())
 }
 
-fn execute_git_command_and_capture_output(args: &[String]) -> Result<CommandOutput, AppError> {
-    let cmd_to_run = if args.is_empty() { vec!["--help".to_string()] } else { args.to_vec() };
-    tracing::debug!("Capturing output: git {}", cmd_to_run.join(" "));
-    let output = StdCommand::new("git")
-        .args(&cmd_to_run)
-        .output()
-        .map_err(|e| AppError::Io(format!("Failed to execute: git {}", cmd_to_run.join(" ")), e))?;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    if !output.status.success() {
-        tracing::warn!("Git cmd 'git {}' non-success {}. Stdout: [{}], Stderr: [{}]", cmd_to_run.join(" "), output.status, stdout, stderr);
-    }
-    Ok(CommandOutput { stdout, stderr, status: output.status })
-}
 
-fn passthrough_to_git(args: &[String]) -> Result<(), AppError> {
-    let command_to_run = if args.is_empty() { vec!["--help".to_string()] } else { args.to_vec() };
-    let cmd_str_log = command_to_run.join(" ");
-    tracing::debug!("Passing to system git: git {}", cmd_str_log);
-    let status = StdCommand::new("git")
-        .args(&command_to_run)
-        .status()
-        .map_err(|e| AppError::Io(format!("Failed to execute system git: git {}", cmd_str_log), e))?;
-    if !status.success() {
-        tracing::warn!("Git passthrough 'git {}' failed: {}", cmd_str_log, status);
-        return Err(AppError::Git(GitError::PassthroughFailed {
-            command: format!("git {}", cmd_str_log),
-            status_code: status.code(),
-        }));
-    }
-    Ok(())
-}
 
-fn map_output_to_git_command_error(cmd_str: &str, output: ProcessOutput) -> GitError {
-    GitError::CommandFailed {
-        command: cmd_str.to_string(),
-        status_code: output.status.code(),
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-    }
-}
+
+
 
 async fn handle_commit_passthrough(args: CommitArgs, context_msg: String) -> Result<(), AppError> { 
     tracing::info!("Commit passthrough {}: msg: {:?}, args: {:?}", context_msg, args.message, args.passthrough_args);
@@ -248,7 +212,13 @@ async fn handle_commit(args: CommitArgs, config: &AppConfig) -> Result<(), AppEr
         tracing::debug!("Staged changes for AI:\n{}", diff);
         let user_prompt = format!("Git diff:\n{}\nGenerate commit message.", diff.trim());
         let messages = vec![
-            ChatMessage { role: "system".to_string(), content: config.system_prompt.clone() },
+            ChatMessage { 
+                role: "system".to_string(), 
+                content: config.prompts.get("commit").cloned().unwrap_or_else(|| {
+                    tracing::warn!("Commit prompt not found in config, using empty string");
+                    "".to_string()
+                }) 
+            },
             ChatMessage { role: "user".to_string(), content: user_prompt },
         ];
         let req_payload = OpenAIChatRequest { model: config.ai.model_name.clone(), messages, temperature: Some(config.ai.temperature), stream: false };

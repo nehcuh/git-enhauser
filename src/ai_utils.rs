@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use lazy_static::lazy_static;
+use regex::Regex;
 
 /// Represents a chat message with a role and content
 /// 
@@ -21,18 +23,11 @@ pub struct OpenAIChatRequest {
     // pub top_p: Option<f32>,
 }
 
-/// Represents a message in the OpenAI API response format
-#[derive(Deserialize, Debug, Clone)]
-pub struct OpenAIMessage {
-    pub role: String,
-    pub content: String,
-}
-
 /// Represents a choice in the OpenAI API response
 #[derive(Deserialize, Debug, Clone)]
 pub struct OpenAIChoice {
     pub index: u32,
-    pub message: OpenAIMessage,
+    pub message: ChatMessage,
     pub finish_reason: String,
     // pub logprobs: Option<serde_json::Value>, // If logprobs parsing is needed
 }
@@ -60,37 +55,20 @@ pub struct OpenAIChatCompletionResponse {
 /// Removes <think>...</think> tags and their content from a given string.
 ///
 /// The (?s) flag allows . to match newlines, in case <think> tags span multiple lines.
-/// This regex is static and pre-tested as valid, so unwrap() is generally acceptable
-/// for Regex::new if it were compiled once (e.g., using once_cell::sync::Lazy).
-/// For a function that might be called frequently, compiling the regex once and reusing it
-/// is more performant. Here, for simplicity in a utility function that might not be
-/// a hot path, direct use is shown. Consider `once_cell` for optimization if needed.
+/// The regex pattern is compiled once using lazy_static for better performance
+/// since this function might be called frequently.
+lazy_static! {
+    static ref RE_THINK_TAGS: Regex = Regex::new(r"(?s)<think>.*?</think>").unwrap();
+}
+
 pub fn clean_ai_output(text: &str) -> String {
-    // In a real-world scenario where this function might be called very frequently,
-    // compiling the regex once using `once_cell::sync::Lazy` would be more performant.
-    // For example:
-    // use once_cell::sync::Lazy;
-    // static RE_THINK_TAGS: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?s)<think>.*?</think>").unwrap());
-    // RE_THINK_TAGS.replace_all(text, "").into_owned()
-    //
-    // However, for this case, direct compilation is shown for simplicity.
-    // The regex crate itself has internal caching, so performance might still be acceptable.
-    match regex::Regex::new(r"(?s)<think>.*?</think>") {
-        Ok(re) => re.replace_all(text, "").into_owned(),
-        Err(_) => {
-            // Fallback or error logging if regex compilation fails, though unlikely for a static pattern.
-            // For this specific static pattern, unwrap() might be considered if an unrecoverable error is acceptable.
-            // However, returning the original text or an error might be safer in a library.
-            // Here, we'll return the original text if regex fails, though it indicates an issue with the regex itself.
-            text.to_string()
-        }
-    }
+    // Using the pre-compiled regex pattern for better performance
+    RE_THINK_TAGS.replace_all(text, "").into_owned()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use regex::Regex; // Keep this import if you want to test Regex directly or for other regex needs in tests
 
     #[test]
     fn test_clean_ai_output_no_tags() {

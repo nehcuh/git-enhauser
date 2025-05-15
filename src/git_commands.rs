@@ -95,7 +95,7 @@ pub fn is_in_git_repository() -> Result<bool, AppError> {
 ///
 /// * `Result<(), AppError>` - Success or an error
 pub fn passthrough_to_git(args: &[String]) -> Result<(), AppError> {
-    let command_to_run = if args.is_empty() { vec!["--help".to_string()] } else { args.to_vec() };
+    let command_to_run = args.to_vec();
     let cmd_str_log = command_to_run.join(" ");
     tracing::debug!("Passing to system git: git {}", cmd_str_log);
     let status = Command::new("git")
